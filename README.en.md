@@ -1,210 +1,77 @@
 # WebVado
 
-A web-based FPGA development environment that mimics Vivado's UI but uses open-source toolchains.
+[中文](README.md) · [Quick start](docs/QUICK_START.md) · [Verification record](docs/STATUS.md)
 
-## What you can do with it
+A browser-based Verilog workbench with a Vivado 2017.4-inspired interface. Express runs the local FPGA toolchain; the frontend uses vanilla JavaScript and local assets, without React, Vue, or CDN dependencies.
 
-Write Verilog, synthesize, generate bitstreams, simulate waveforms. All in your browser. No need to install Vivado's 50GB monster.
+## Start
 
-Currently integrates:
-- **Icarus Verilog** — Simulation
-- **Yosys** — Synthesis  
-- **nextpnr** — Place and route
+Requires Node.js 18+, npm, and a desktop browser.
 
-The UI is modeled after Vivado 2017.4. If you're used to Vivado, you'll feel at home.
-
-## Screenshot
-
-![Main Interface](docs/screenshot-main.png)
-
-Flow Navigator on the left, code editor and file tree in the center, Tcl console at the bottom.
-
-## Quick Start
-
-### 1. Install dependencies
-
-```bash
-npm install
-```
-
-### 2. Install toolchains (optional)
-
-If you want actual synthesis and simulation:
-
-```bash
-# macOS
-brew install icarus-verilog yosys
-
-# Ubuntu/Debian
-sudo apt install iverilog yosys
-```
-
-nextpnr requires compilation and is more involved. You can skip it if you just want to try the UI.
-
-### 3. Start the server
-
-```bash
+```sh
+git clone https://github.com/Kerry1020/webvado.git
+cd webvado
+npm ci
 npm start
 ```
 
-Open http://localhost:3000 in your browser.
+Open **http://localhost:3000**. `npm run dev` serves both frontend and API from Express; refresh after frontend edits.
 
-## Project Structure
+### Install the toolchain
 
-```
-webvado/
-├── backend/              # Node.js + Express backend
-│   ├── server.js         # Server entry point
-│   ├── services/         # Core services (project mgmt, file mgmt, toolchain invocation)
-│   └── routes/           # API routes
-├── frontend/             # Pure HTML/CSS/JS frontend (no framework)
-│   ├── index.html        # Main page
-│   ├── css/              # Stylesheets
-│   ├── js/               # All JS modules
-│   │   ├── main.js       # App entry point
-│   │   ├── components/   # UI components (Dialog, FlowNavigator, SourcesPanel, etc.)
-│   │   ├── managers/     # Managers (ProjectManager, EditorManager, ConsoleManager)
-│   │   ├── ui/           # UI utilities (UIManager, icons.js)
-│   │   ├── editor/       # Code editor
-│   │   └── i18n/         # Multilingual support (EN/CN)
-└── projects/             # User project storage
+Download [OSS CAD Suite](https://github.com/YosysHQ/oss-cad-suite-build/releases) for your OS and CPU, verify the official SHA-256, and extract it into `tools/oss-cad-suite/`. Homebrew is not required.
+
+Alternatively, use an existing installation:
+
+```sh
+WEBVADO_TOOLCHAIN=/absolute/path/oss-cad-suite/bin npm start
+npm run check-tools
 ```
 
-## Feature List
+The configured directory (or bundled directory) is searched before system `PATH`. Help → About shows detection results. Missing tools produce explicit build errors.
 
-### Implemented
+## Workflow
 
-- ✅ Project management (create, open, save)
-- ✅ Vivado-style Flow Navigator
-- ✅ Code editor with syntax highlighting
-- ✅ File tree
-- ✅ Tcl console
-- ✅ Waveform viewer (VCD files)
-- ✅ Language switching (EN/CN)
-- ✅ Toolchain invocation interface
-- ✅ WebSocket real-time communication
+1. Create a project and select a device.
+2. Add design sources to `srcs/rtl`, testbenches to `srcs/sim`, and constraints to `srcs/constrs`.
+3. Edit a file and save with the toolbar or Ctrl/Cmd+S. The file context menu sets the top module.
+4. **Check Syntax** invokes Icarus Verilog.
+5. **Run Simulation** compiles design and testbench, runs vvp, and displays the generated VCD.
+6. **Run Synthesis** invokes Yosys and produces a netlist and utilization statistics.
+7. For iCE40 projects, **Run Implementation** invokes nextpnr and **Generate Bitstream** invokes icepack.
+8. **Open Hardware Manager** detects a programming cable and flashes the bitstream (openFPGALoader; manual trigger only, stale bitstreams are rejected).
 
-### Planned
+See the [sample design and testbench](docs/QUICK_START.md). Device, package, and PCF pin assignments must match the board. Producing a bitstream does not prove hardware operation; no physical-board programming result is claimed.
 
-- ⏳ Full nextpnr integration (currently only Yosys and Icarus)
-- ⏳ Block Design (graphical design, like IP Integrator)
-- ⏳ Constraint editor (XDC/PCF files)
-- ⏳ Hardware Manager (Program Device)
-- ⏳ Project import/export
-- ⏳ Dark theme
+## Scope
 
-### Won't Do
+- English/Chinese UI switching via Help → Language, persisted in the browser.
+- Text editor with line numbers, find/replace, undo/redo, and compiler diagnostics. It is not CodeMirror/Monaco and has no semantic completion.
+- Console commands and history. This is a limited command dispatcher, **not a Tcl interpreter**; use `help` for supported commands.
+- VCD scalar and bus signals with zoom and pan.
+- iCE40 is the place-and-route/bitstream target. Yosys device support does not imply that every device is integrated here.
+- IP Catalog, graphical Block Design, and RTL elaboration views are not implemented. The post-synthesis netlist schematic (SVG) is implemented, as is hardware programming via openFPGALoader (manual trigger only; stale bitstreams are rejected) — but no physical board has been programmed, so real-device flashing is not claimed as verified. Capability messages are not implementations of features.
+- No direct Vivado project import, proprietary IP, or VHDL compilation.
 
-- ❌ Commercial FPGA tool support (Quartus / ISE / Vivado itself)
-- ❌ Proprietary IP cores
-- ❌ VHDL support (Verilog only)
-
-## Why This Exists
-
-Vivado is too heavy. 50GB install, slow startup, license hassles. Often you just want to edit a few lines of Verilog, run a simulation, check waveforms — you don't need the full suite.
-
-Open-source toolchains (Yosys + nextpnr) already support many FPGAs (iCE40, ECP5, Gowin, etc.), but there's no good IDE. WebVado aims to be a lightweight, browser-based development environment.
-
-## Tech Stack
-
-- **Backend**: Node.js + Express
-- **Frontend**: Vanilla JS (no React/Vue/Angular), ES6 modules
-- **UI Style**: Mimics Vivado 2017.4
-- **Icons**: Hand-written SVG, no emoji
-- **Multilingual**: Custom i18n system, no library dependencies
-- **Offline**: All static assets loaded locally, no CDN
-
-Chose Vanilla JS to control bundle size. No 50MB frontend frameworks. All UI components are hand-written.
+Application assets are local. Editing and builds work offline after dependencies and tools are installed; external documentation/GitHub links require a network connection.
 
 ## Development
 
-### Adding a new Flow Navigator item
-
-Edit `frontend/js/components/FlowNavigator.js`, add to `getSections()`:
-
-```javascript
-{
-  id: 'my-section',
-  title: 'MY SECTION',
-  items: [
-    { 
-      id: 'my-item', 
-      iconSvg: Icons.play, 
-      label: 'My Item', 
-      action: 'my-action',
-      playable: true  // green play button
-    }
-  ]
-}
+```sh
+npm run check             # JavaScript syntax, including imported modules
+npm run lint
+npm test                  # Node unit tests
+npm run test:integration  # Real FPGA tools required
+npm run test:e2e          # Playwright browser regressions
+npm run build             # Runnable ESM tree in dist/
 ```
 
-Then register the event in `main.js`:
+Install the browser once with `npx playwright install chromium`. Test requirements and actual results are recorded in [STATUS.md](docs/STATUS.md).
 
-```javascript
-this.eventBus.on('action:my-action', () => this.handleMyAction());
-```
+The build preserves the source directory structure and ESM imports. It excludes dependencies, user projects, and tool binaries. Run `node dist/backend/server.js` from the repository, with `WEBVADO_TOOLCHAIN` pointing to an external toolchain when needed. Set `WEBVADO_PROJECTS_DIR` to choose a project storage directory.
 
-### Adding a new dialog
+`backend/` contains API routes, services, and VCD parsing. `frontend/` contains local HTML/CSS/JS. `projects/` stores user data and `tools/` stores local binaries; neither belongs in Git. Test and build helpers live in `tests/` and `scripts/`.
 
-Create a new file under `frontend/js/components/dialogs/`, follow the pattern in `NewProjectDialog.js`. All dialog buttons must have `type="button"` to prevent form submission.
+The original specification and implementation plan describe design goals, not verified delivery. Report bugs with reproduction steps and preserve diagnostics in fixes.
 
-### Debugging
-
-Open browser DevTools Console. All components print initialization logs. Server logs are configured with pino in `backend/server.js` and output to the terminal.
-
-## Known Issues
-
-- VCD waveform viewer only displays simple signals; complex buses and hierarchy display has bugs
-- Tcl console has no command history
-- Code editor autocomplete not implemented yet
-- Browser refresh loses project state (need to reopen)
-
-## Contributing
-
-PRs welcome. Search for existing issues before opening a new one.
-
-Code style:
-- Use ES6 modules and async/await
-- All buttons must have `data-action` attribute
-- CSS uses BEM naming
-- Commit messages in English, follow [Conventional Commits](https://www.conventionalcommits.org/)
-
-## License
-
-MIT License
-
----
-
-## FAQ
-
-**Q: Why don't buttons respond when I click them?**
-
-A: Check the browser Console for errors. Most "no response" issues are due to failed JS module loading or unbound events.
-
-**Q: Why don't Flow Navigator section titles show up?**
-
-A: CSS might not have loaded. Check the Network panel to see if `flow-navigator.css` returns 404.
-
-**Q: Which FPGAs are supported?**
-
-A: Theoretically all chips supported by Yosys + nextpnr (iCE40, ECP5, Nexus, Gowin, Anlogic, etc.). In reality I've only tested on iCE40HX8K.
-
-**Q: Can I use VHDL?**
-
-A: No. Yosys has incomplete VHDL support, and I don't want to maintain two languages.
-
-**Q: Can I import Vivado projects?**
-
-A: Not yet. Vivado's project file format is proprietary. You can copy .v files over, but constraints and IP core configs need manual reconstruction.
-
-**Q: Why not use React?**
-
-A: To keep the bundle under 1MB. React brings in tons of dependencies and ends up at 50MB+ after bundling. This project aims to "run smoothly on an old laptop with 2GB RAM."
-
-**Q: Does it work on mobile?**
-
-A: Barely. The UI is designed for desktop; screens under 1024px get crushed.
-
----
-
-**Bottom line**: This project is still in early development. Many features are half-baked. If you find bugs or have feature requests, open an issue or submit a PR.
+[Issues](https://github.com/Kerry1020/webvado/issues) · MIT License
