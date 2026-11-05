@@ -1,296 +1,81 @@
-# WebVado Quick Start Guide
+# 第一个 Verilog 工程 / First Verilog project
 
-This guide will help you get WebVado up and running in under 10 minutes.
+先按 [README](../README.md) 启动服务并安装 OSS CAD Suite。
 
-## Prerequisites
+以下两个源文件也放在 `examples/counter/`。服务启动后运行 `bash scripts/demo.sh` 可创建一个独立示例工程，已有同名工程会被拒绝而不是覆盖。
 
-- **Node.js 18+** ([Download](https://nodejs.org/))
-- **Icarus Verilog** (required for Level 2 features)
-- **Git** (for cloning the repository)
+## 1. 新建工程
 
-## Installation
+点击 **File → New Project**，名称使用一个未占用的名称，例如 `counter_demo`，器件选择 `ice40hx8k`。
 
-### 1. Clone the Repository
+## 2. 添加设计文件
 
-```bash
-git clone https://github.com/yourusername/webvado.git
-cd webvado
-```
-
-### 2. Install Dependencies
-
-```bash
-npm install
-```
-
-### 3. Install Verilog Toolchain
-
-**macOS:**
-```bash
-brew install icarus-verilog
-```
-
-**Ubuntu/Debian:**
-```bash
-sudo apt-get update
-sudo apt-get install iverilog
-```
-
-**Windows:**
-Use WSL2 with Ubuntu, then follow Linux instructions.
-
-### 4. Verify Toolchain
-
-```bash
-npm run check-tools
-```
-
-You should see:
-```
-✓ Icarus Verilog            v12.0 (or higher)
-✓ All required tools are installed!
-```
-
-## Running WebVado
-
-### Development Mode
-
-```bash
-npm run dev
-```
-
-This will:
-1. Start the backend server on port 3000
-2. Automatically open your browser to `http://localhost:3000`
-3. Enable hot-reload for development
-
-### Production Mode
-
-```bash
-npm run build
-npm start
-```
-
-## Your First Project
-
-### 1. Create a New Project
-
-1. Click **File → New Project**
-2. Enter project name: `led_blinker`
-3. Select target part: `ice40hx8k` (or leave default)
-4. Click **Create**
-
-### 2. Add a Verilog File
-
-1. Right-click **Design Sources** in the Flow Navigator
-2. Select **Add Sources → Create File**
-3. Name: `blinker.v`
-4. Add this code:
+点击 **Add Sources**，文件类型选择 **Design source**，文件名 `counter.v`。在编辑器内替换为以下内容并保存：
 
 ```verilog
-module blinker(
-    input clk,
-    input rst,
-    output reg led
+module counter (
+  input wire clk,
+  input wire rst,
+  output reg [3:0] count
 );
-
-reg [23:0] counter;
-
-always @(posedge clk or posedge rst) begin
-    if (rst) begin
-        counter <= 0;
-        led <= 0;
-    end else begin
-        counter <= counter + 1;
-        if (counter == 24'hFFFFFF) begin
-            led <= ~led;
-            counter <= 0;
-        end
-    end
-end
-
+  always @(posedge clk) begin
+    if (rst) count <= 4'd0;
+    else count <= count + 1'b1;
+  end
 endmodule
 ```
 
-### 3. Add a Testbench
+在文件树右键 `counter.v` → **Set as Top**。然后运行 **Tools → Check Syntax**。
 
-1. Right-click **Simulation Sources**
-2. Select **Add Sources → Create File**
-3. Name: `blinker_tb.v`
-4. Add this code:
+## 3. 添加 testbench
+
+再次点击 **Add Sources**，选择 **Simulation source**，文件名 `counter_tb.v`，保存以下内容：
 
 ```verilog
 `timescale 1ns / 1ps
-
-module blinker_tb;
-
-reg clk;
-reg rst;
-wire led;
-
-blinker uut (
-    .clk(clk),
-    .rst(rst),
-    .led(led)
-);
-
-initial begin
-    clk = 0;
-    forever #5 clk = ~clk; // 100MHz clock
-end
-
-initial begin
-    rst = 1;
-    #100 rst = 0;
-    
-    #100000000; // Run for 100ms
-    
+module counter_tb;
+  reg clk = 0;
+  reg rst = 1;
+  wire [3:0] count;
+  counter dut (.clk(clk), .rst(rst), .count(count));
+  always #5 clk = ~clk;
+  initial begin
+    $dumpfile("counter.vcd");
+    $dumpvars(0, counter_tb);
+    #12 rst = 0;
+    #100;
+    if (count !== 4'd10) $fatal(1, "Counter mismatch: %d", count);
+    $display("COUNTER_PASS");
     $finish;
-end
-
+  end
 endmodule
 ```
 
-### 4. Run Simulation
+点击 **Run Simulation**。预期出现 VCD 波形，日志包含 `COUNTER_PASS`。仿真包含 `srcs/rtl` 与 `srcs/sim`，综合只使用设计文件。
 
-1. Click **Flow → Run Simulation** (or press the play button in toolbar)
-2. Wait for compilation to complete
-3. Waveform viewer will open automatically
-4. You should see the `led` signal toggling
+## 4. 综合与 bitstream
 
-### 5. Zoom and Explore
+点击 **Run Synthesis**，查看综合网表和资源报告。iCE40 的布局布线使用 nextpnr，打包使用 icepack。
 
-- **Zoom in:** Mouse wheel up or `Ctrl +`
-- **Zoom out:** Mouse wheel down or `Ctrl -`
-- **Pan:** Click and drag horizontally
-- **Add cursor:** Click on waveform
+实际板卡需要匹配的封装和 PCF。通过 **Add Sources → Constraint** 添加 `.pcf`，每个外部端口映射到板卡允许的管脚。不要直接套用其他板子的 pin number。未提供引脚约束的构建即使成功，也只能用于检查工具流程，不能据此声称已经在硬件上验证。
 
-## Project Structure
+**Run Implementation** 生成布局布线结果，**Generate Bitstream** 生成配置文件；构建错误会显示在控制台中。**Open Hardware Manager** 可检测电缆并烧录（编程只由手动点击触发，过期位流会被拒绝）；本仓库的验证没有连接物理板卡，不声称真实烧录已通过。
 
-Your project will be created at:
-```
-~/webvado/projects/led_blinker/
-├── .webvado/
-│   ├── project.json        # Project metadata
-│   └── build/              # Build artifacts
-├── srcs/
-│   ├── rtl/
-│   │   └── blinker.v       # Your Verilog files
-│   └── sim/
-│       └── blinker_tb.v    # Testbenches
-└── README.md
+## 5. 日常操作
+
+- 点击文件树中的文件打开它；工具栏 Save 或 Ctrl/Cmd+S 保存。
+- File → Close Project 关闭，File → Open Project 重新打开；文件内容保存在服务器磁盘上。
+- Help → Language 切换中英文。
+- Settings 配置编辑器选项；工具链版本在 Help → About 中查看。
+- 控制台输入 `help` 查看支持的命令。它不是完整的 Tcl 环境。
+
+## 测试
+
+```sh
+npm run check
+npm test
+npm run test:integration
+npm run test:e2e
 ```
 
-## Common Commands
-
-### Tcl Console
-
-WebVado includes a Tcl-like console for advanced users. Try these commands:
-
-```tcl
-# Show help
-help
-
-# List project files
-ls
-
-# Check syntax
-check_syntax blinker.v
-
-# Run simulation
-launch_simulation -mode behavioral
-
-# View project info
-get_property TOP_MODULE [current_project]
-```
-
-## Keyboard Shortcuts
-
-| Shortcut | Action |
-|----------|--------|
-| `Ctrl+N` | New Project |
-| `Ctrl+O` | Open Project |
-| `Ctrl+S` | Save All |
-| `Ctrl+F` | Find/Replace |
-| `Ctrl+Z` | Undo |
-| `Ctrl+Y` | Redo |
-| `F11` | Fullscreen |
-
-## Troubleshooting
-
-### Backend Won't Start
-
-**Problem:** `Error: Cannot find module 'express'`
-
-**Solution:**
-```bash
-rm -rf node_modules package-lock.json
-npm install
-```
-
-### Toolchain Not Found
-
-**Problem:** `✗ Icarus Verilog NOT FOUND`
-
-**Solution:**
-1. Install Icarus Verilog (see Installation section)
-2. Verify with: `iverilog -V`
-3. If installed but not found, add to PATH
-
-### Port Already in Use
-
-**Problem:** `Error: listen EADDRINUSE: address already in use :::3000`
-
-**Solution:**
-```bash
-# Kill existing process
-lsof -ti:3000 | xargs kill -9
-
-# Or use a different port
-PORT=3001 npm start
-```
-
-### Simulation Hangs
-
-**Problem:** Simulation doesn't complete
-
-**Solution:**
-- Check testbench has `$finish` statement
-- Reduce simulation time
-- Check for infinite loops in Verilog
-
-## Next Steps
-
-- **[Read the full documentation](docs/SPECIFICATION.md)**
-- **[Explore example projects](examples/)**
-- **[Join our Discord community](https://discord.gg/webvado)**
-- **[Contribute on GitHub](https://github.com/yourusername/webvado)**
-
-## Level 3 Features (Coming Soon)
-
-Once you're comfortable with simulation, explore these advanced features:
-
-- **Synthesis:** Convert RTL to netlist with Yosys
-- **Place & Route:** FPGA implementation with nextpnr
-- **Timing Analysis:** Check if your design meets timing
-- **Bitstream Generation:** Create .bin files for real FPGAs
-- **Device Programming:** Upload to iCE40 or ECP5 boards
-
-To enable Level 3 features, install additional tools:
-```bash
-# macOS
-brew install yosys icestorm nextpnr-ice40
-
-# Ubuntu/Debian
-sudo apt-get install yosys fpga-icestorm nextpnr-ice40
-```
-
-## Getting Help
-
-- **Documentation:** [docs/](docs/)
-- **GitHub Issues:** [Report bugs](https://github.com/yourusername/webvado/issues)
-- **Discussions:** [Ask questions](https://github.com/yourusername/webvado/discussions)
-
----
-
-**Welcome to WebVado! Happy coding! 🚀**
+集成测试需要真实工具链，浏览器测试需要 Playwright Chromium。测试使用临时工程；不要用已有的用户工程作为测试夹具。

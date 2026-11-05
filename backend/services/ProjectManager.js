@@ -11,7 +11,8 @@ const logger = pino({ name: 'ProjectManager' });
 export class ProjectManager {
   constructor(projectsDir) {
     this.projectsDir = projectsDir;
-    this.ensureProjectsDirectory();
+    this.ready = this.ensureProjectsDirectory();
+    this.updateQueue = Promise.resolve();
   }
 
   async ensureProjectsDirectory() {
@@ -22,6 +23,7 @@ export class ProjectManager {
    * Create a new project
    */
   async createProject({ name, part = 'ice40hx8k', language = 'verilog' }) {
+    await this.ready;
     // Validate inputs
     if (!name || typeof name !== 'string') {
       throw new Error('Project name is required');
@@ -30,13 +32,20 @@ export class ProjectManager {
     if (!/^[a-zA-Z0-9_-]{1,50}$/.test(name)) {
       throw new Error('Invalid project name. Use only letters, numbers, hyphens, and underscores (1-50 chars)');
     }
+    this.validateMetadata({ part });
+    if (!['verilog', 'systemverilog'].includes(language)) {
+      throw Object.assign(new Error('language must be verilog or systemverilog'), { status: 400 });
+    }
 
     const projectId = `proj_${uuidv4().substring(0, 8)}`;
     const projectPath = path.join(this.projectsDir, name);
 
     // Check if project already exists
-    if (await fs.pathExists(projectPath)) {
-      throw new Error(`Project "${name}" already exists`);
+    try {
+      await fs.mkdir(projectPath);
+    } catch (error) {
+      if (error.code === 'EEXIST') throw new Error(`Project "${name}" already exists`);
+      throw error;
     }
 
     // Create project structure
@@ -99,6 +108,7 @@ export class ProjectManager {
    * List all projects
    */
   async listProjects() {
+    await this.ready;
     const entries = await fs.readdir(this.projectsDir, { withFileTypes: true });
     const projects = [];
 
@@ -109,7 +119,9 @@ export class ProjectManager {
       const metadataPath = path.join(projectPath, '.webvado', 'project.json');
 
       try {
+        if ((await fs.lstat(path.join(projectPath, '.webvado'))).isSymbolicLink()) continue;
         if (await fs.pathExists(metadataPath)) {
+          if ((await fs.lstat(metadataPath)).isSymbolicLink()) continue;
           const metadata = await fs.readJson(metadataPath);
           projects.push({
             ...metadata,
@@ -136,6 +148,13 @@ export class ProjectManager {
    * Update project metadata
    */
   async updateProject(idOrName, updates) {
+    this.validateMetadata(updates);
+    const operation = this.updateQueue.then(() => this.updateMetadata(idOrName, updates));
+    this.updateQueue = operation.catch(() => {});
+    return operation;
+  }
+
+  async updateMetadata(idOrName, updates) {
     const project = await this.getProject(idOrName);
     if (!project) {
       throw new Error(`Project "${idOrName}" not found`);
@@ -144,17 +163,37 @@ export class ProjectManager {
     const metadataPath = path.join(project.path, '.webvado', 'project.json');
     const metadata = await fs.readJson(metadataPath);
 
+    const allowed = Object.fromEntries(Object.entries(updates).filter(([key]) =>
+      ['top_module', 'part', 'settings', 'build_status'].includes(key)));
     const updated = {
       ...metadata,
-      ...updates,
+      ...allowed,
+      settings: { ...metadata.settings, ...allowed.settings },
+      build_status: { ...metadata.build_status, ...allowed.build_status },
+      id: metadata.id,
+      name: metadata.name,
       updated_at: new Date().toISOString()
     };
 
-    await fs.writeJson(metadataPath, updated, { spaces: 2 });
+    const temporary = `${metadataPath}.${uuidv4()}.tmp`;
+    await fs.writeJson(temporary, updated, { spaces: 2 });
+    await fs.rename(temporary, metadataPath);
 
     logger.info({ projectId: project.id, updates }, 'Project updated');
 
-    return updated;
+    return { ...updated, path: project.path };
+  }
+
+  validateMetadata(updates) {
+    const invalid = message => { throw Object.assign(new Error(message), { status: 400 }); };
+    if (updates.part !== undefined && (typeof updates.part !== 'string' || !/^[\w-]{1,40}$/.test(updates.part))) invalid('Invalid part');
+    if (updates.top_module !== undefined && (typeof updates.top_module !== 'string' || (updates.top_module !== '' && !/^[A-Za-z_][\w$]{0,127}$/.test(updates.top_module)))) invalid('top_module must be a Verilog identifier');
+    if (updates.settings !== undefined) {
+      const settings = updates.settings;
+      if (!settings || typeof settings !== 'object' || Array.isArray(settings)) invalid('settings must be an object');
+      if (settings.target_frequency_mhz !== undefined && (typeof settings.target_frequency_mhz !== 'number' || !Number.isFinite(settings.target_frequency_mhz) || settings.target_frequency_mhz <= 0 || settings.target_frequency_mhz > 1000)) invalid('target_frequency_mhz must be greater than 0 and at most 1000');
+      if (settings.package !== undefined && (typeof settings.package !== 'string' || !/^[A-Za-z][A-Za-z0-9]{1,20}$/.test(settings.package))) invalid('Invalid package');
+    }
   }
 
   /**
@@ -203,6 +242,7 @@ export class ProjectManager {
     const result = [];
 
     for (const entry of entries) {
+      if (entry.isSymbolicLink()) continue;
       const fullPath = path.join(dirPath, entry.name);
       const relativePath = path.relative(this.projectsDir, fullPath);
 

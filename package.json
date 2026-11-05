@@ -5,16 +5,19 @@
   "main": "backend/server.js",
   "type": "module",
   "scripts": {
-    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev": "npm run dev:backend",
     "dev:backend": "nodemon --watch backend backend/server.js",
-    "dev:frontend": "cd frontend && python3 -m http.server 8080",
+    "dev:frontend": "npm run dev:backend",
     "start": "node backend/server.js",
-    "build": "npm run build:frontend && npm run build:backend",
-    "build:frontend": "esbuild frontend/js/main.js --bundle --outfile=dist/frontend/js/bundle.js --minify",
-    "build:backend": "esbuild backend/server.js --bundle --outfile=dist/backend/server.js --platform=node --minify",
-    "test": "NODE_OPTIONS=--experimental-vm-modules jest",
-    "test:watch": "NODE_OPTIONS=--experimental-vm-modules jest --watch",
-    "test:coverage": "NODE_OPTIONS=--experimental-vm-modules jest --coverage",
+    "build": "node scripts/build.js",
+    "build:frontend": "node scripts/build.js frontend",
+    "build:backend": "node scripts/build.js backend",
+    "check": "node scripts/check-syntax.js",
+    "test": "node --test tests/unit/*.test.js tests/hardware/*.test.js",
+    "test:watch": "node --test --watch tests/unit/*.test.js tests/hardware/*.test.js",
+    "test:coverage": "node --test --experimental-test-coverage tests/unit/*.test.js tests/hardware/*.test.js",
+    "test:integration": "node --test tests/integration/*.test.js",
+    "test:e2e": "node scripts/test-server.js",
     "lint": "eslint backend frontend/js",
     "format": "prettier --write \"**/*.{js,json,md,css,html}\"",
     "check-tools": "node scripts/check-toolchain.js"
@@ -37,12 +40,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/yourusername/webvado.git"
+    "url": "https://github.com/Kerry1020/webvado.git"
   },
   "bugs": {
-    "url": "https://github.com/yourusername/webvado/issues"
+    "url": "https://github.com/Kerry1020/webvado/issues"
   },
-  "homepage": "https://github.com/yourusername/webvado#readme",
+  "homepage": "https://github.com/Kerry1020/webvado#readme",
   "engines": {
     "node": ">=18.0.0",
     "npm": ">=9.0.0"

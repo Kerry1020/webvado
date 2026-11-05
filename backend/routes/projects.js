@@ -1,16 +1,7 @@
 import express from 'express';
-import { ProjectManager } from '../services/ProjectManager.js';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const router = express.Router();
-
-// Initialize ProjectManager
-const projectsDir = path.join(__dirname, '../../projects');
-const projectManager = new ProjectManager(projectsDir);
+const pm = req => req.app.locals.projectManager;
 
 /**
  * GET /api/projects
@@ -18,7 +9,7 @@ const projectManager = new ProjectManager(projectsDir);
  */
 router.get('/', async (req, res, next) => {
   try {
-    const projects = await projectManager.listProjects();
+    const projects = await pm(req).listProjects();
     res.json({ projects });
   } catch (error) {
     next(error);
@@ -31,15 +22,15 @@ router.get('/', async (req, res, next) => {
  */
 router.post('/', async (req, res, next) => {
   try {
-    const { name, part, language } = req.body;
+    const { name, part, language } = req.body || {};
 
-    if (!name) {
+    if (!name || typeof name !== 'string') {
       return res.status(400).json({
         error: 'Missing required field: name'
       });
     }
 
-    const project = await projectManager.createProject({ name, part, language });
+    const project = await pm(req).createProject({ name, part, language });
     
     res.status(201).json(project);
   } catch (error) {
@@ -57,7 +48,7 @@ router.post('/', async (req, res, next) => {
 router.get('/:id', async (req, res, next) => {
   try {
     const { id } = req.params;
-    const project = await projectManager.getProject(id);
+    const project = await pm(req).getProject(id);
 
     if (!project) {
       return res.status(404).json({
@@ -65,8 +56,7 @@ router.get('/:id', async (req, res, next) => {
       });
     }
 
-    // Get file structure
-    const files = await projectManager.getProjectFiles(id);
+    const files = await pm(req).getProjectFiles(id);
 
     res.json({
       ...project,
@@ -79,19 +69,32 @@ router.get('/:id', async (req, res, next) => {
 
 /**
  * PUT /api/projects/:id
- * Update project metadata
+ * Update project settings. Only top_module, part and settings are writable.
  */
 router.put('/:id', async (req, res, next) => {
   try {
     const { id } = req.params;
-    const updates = req.body;
+    const updates = {};
+    const { top_module, part, settings } = req.body || {};
 
-    // Don't allow updating certain fields
-    delete updates.id;
-    delete updates.created_at;
-    delete updates.path;
+    if (top_module !== undefined) {
+      if (top_module !== '' && !/^[A-Za-z_][\w$]{0,127}$/.test(top_module)) {
+        return res.status(400).json({ error: 'top_module must be a Verilog identifier' });
+      }
+      updates.top_module = top_module;
+    }
+    if (part !== undefined) {
+      if (!/^[\w-]{1,40}$/.test(part)) return res.status(400).json({ error: 'Invalid part' });
+      updates.part = part;
+    }
+    if (settings !== undefined) {
+      if (typeof settings !== 'object' || settings === null || Array.isArray(settings)) {
+        return res.status(400).json({ error: 'settings must be an object' });
+      }
+      updates.settings = settings;
+    }
 
-    const updated = await projectManager.updateProject(id, updates);
+    const updated = await pm(req).updateProject(id, updates);
     res.json(updated);
   } catch (error) {
     if (error.message.includes('not found')) {
@@ -108,7 +111,7 @@ router.put('/:id', async (req, res, next) => {
 router.delete('/:id', async (req, res, next) => {
   try {
     const { id } = req.params;
-    const result = await projectManager.deleteProject(id);
+    const result = await pm(req).deleteProject(id);
     res.json(result);
   } catch (error) {
     if (error.message.includes('not found')) {
@@ -125,7 +128,7 @@ router.delete('/:id', async (req, res, next) => {
 router.get('/:id/files', async (req, res, next) => {
   try {
     const { id } = req.params;
-    const files = await projectManager.getProjectFiles(id);
+    const files = await pm(req).getProjectFiles(id);
     res.json(files);
   } catch (error) {
     if (error.message.includes('not found')) {

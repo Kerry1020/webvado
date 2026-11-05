@@ -1,5 +1,7 @@
 # WebVado Phase 1 Complete - Final Summary
 
+> 历史记录：下列内容是早期阶段的自述，包含未经浏览器验证的完成声明，不代表当前验收结果。请以 [STATUS.md](STATUS.md) 和可执行测试为准。
+
 **Date:** 2026-11-05  
 **Status:** ✅ Phase 1 Checkpoint PASSED
 

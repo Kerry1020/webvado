@@ -1,4 +1,6 @@
 # WebVado Implementation Plan
+
+> 原始路线图，不是完成清单。当前实现范围和实际验证见 [STATUS.md](STATUS.md)；未实现的阶段不能因本文件存在而视为已交付。
 **Version:** 1.0  
 **Created:** 2026-11-05  
 **Target Completion:** 16 weeks

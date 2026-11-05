@@ -16,11 +16,34 @@ export class FileManager {
    * Validate and resolve file path
    * Prevents path traversal attacks
    */
-  validatePath(projectPath, filePath) {
-    const resolved = path.resolve(projectPath, filePath);
-    
-    if (!resolved.startsWith(projectPath)) {
+  validatePath(projectPath, filePath, { allowRoot = false } = {}) {
+    if (typeof filePath !== 'string' || filePath.includes('\0') || path.isAbsolute(filePath)) {
       throw new Error('Invalid file path: path traversal detected');
+    }
+    const root = path.resolve(projectPath);
+    const resolved = path.resolve(root, filePath);
+    
+    // path.relative catches both ../ escapes and sibling dirs sharing a prefix
+    const rel = path.relative(root, resolved);
+    if ((!rel && !allowRoot) || rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
+      throw new Error('Invalid file path: path traversal detected');
+    }
+    // Project metadata and build outputs are not editable through the file API
+    if (rel.split(path.sep)[0].toLowerCase() === '.webvado') {
+      throw new Error('Invalid file path: path traversal detected');
+    }
+
+    // Reject symlink components, including dangling links and aliases to metadata.
+    let current = root;
+    for (const component of rel.split(path.sep).filter(Boolean)) {
+      current = path.join(current, component);
+      try {
+        if (fs.lstatSync(current).isSymbolicLink()) {
+          throw new Error('Invalid file path: path traversal detected');
+        }
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+      }
     }
 
     return resolved;
@@ -153,7 +176,7 @@ export class FileManager {
    * List directory contents
    */
   async listDirectory(projectPath, dirPath = '') {
-    const fullPath = this.validatePath(projectPath, dirPath);
+    const fullPath = this.validatePath(projectPath, dirPath, { allowRoot: true });
 
     if (!await fs.pathExists(fullPath)) {
       throw new Error(`Directory not found: ${dirPath}`);
@@ -169,6 +192,7 @@ export class FileManager {
     const items = [];
 
     for (const entry of entries) {
+      if (entry.isSymbolicLink() || entry.name.toLowerCase() === '.webvado') continue;
       const itemPath = path.join(dirPath, entry.name);
       const fullItemPath = path.join(fullPath, entry.name);
       const itemStats = await fs.stat(fullItemPath);

@@ -1,408 +1,521 @@
 import { execa } from 'execa';
 import fs from 'fs-extra';
 import path from 'path';
+import { createHash } from 'node:crypto';
 import pino from 'pino';
 import { parseVCD } from '../parsers/VCDParser.js';
 
 const logger = pino({ name: 'BuildService' });
 
+const HDL_EXT = new Set(['.v', '.sv']);
+const MAX_LOG = 200_000;
+const SYNTH_OUTPUTS = ['synth.json', 'synth_stat.json', 'synthesis-config.json'];
+const IMPLEMENT_OUTPUTS = ['implementation.asc', 'implementation.json', 'implementation-config.json'];
+const BITSTREAM_OUTPUTS = ['bitstream.bin', 'bitstream-config.json'];
+
+// Yosys synth command per device family (from project.part)
+const SYNTH_BY_FAMILY = {
+  ice40: 'synth_ice40',
+  ecp5: 'synth_ecp5',
+  generic: 'synth'
+};
+
+export class BuildError extends Error {
+  constructor(code, message, extra = {}) {
+    super(message);
+    this.code = code;
+    Object.assign(this, extra);
+  }
+}
+
 /**
- * BuildService - Handles Verilog compilation and simulation with iverilog/vvp
+ * BuildService - iverilog/vvp simulation and Yosys synthesis for a project.
+ * Sources: srcs/rtl (design), srcs/sim (testbenches). Outputs: .webvado/build.
  */
 export class BuildService {
   constructor(projectManager, toolchainManager, wsManager) {
     this.projectManager = projectManager;
     this.toolchainManager = toolchainManager;
     this.wsManager = wsManager;
-    this.activeBuilds = new Map(); // projectId -> build state
+    this.activeBuilds = new Map(); // project.id -> { stage, startTime }
   }
 
-  /**
-   * Compile Verilog files with iverilog
-   * @param {string} projectId - Project ID or name
-   * @param {Object} options - Compilation options
-   * @param {string} options.topModule - Top module name (optional, auto-detected if not provided)
-   * @returns {Promise<Object>} Compilation result
-   */
+  // ── Public steps ────────────────────────────────────────────────
+
+  /** Compile design sources with iverilog (syntax / elaboration check). */
   async compile(projectId, { topModule } = {}) {
-    // Ensure iverilog is available
-    await this.toolchainManager.requireTool('iverilog');
-
-    const project = await this.projectManager.getProject(projectId);
-    if (!project) {
-      throw new Error(`Project "${projectId}" not found`);
-    }
-
-    // Mark build as active
-    this.activeBuilds.set(project.id, { stage: 'compile', startTime: Date.now() });
-
-    try {
-      this.broadcastProgress(project.id, 'compile', 10, 'Locating source files...');
-
-      // Gather all Verilog source files
-      const srcsPath = path.join(project.path, 'srcs', 'rtl');
-      const verilogFiles = await this._findVerilogFiles(srcsPath);
-
-      if (verilogFiles.length === 0) {
-        throw new Error('No Verilog source files found in srcs/rtl/');
+    return this.withBuild(projectId, 'compile', async (project, buildDir) => {
+      const iverilog = await this.toolchainManager.requireTool('iverilog');
+      const design = await this.sources(project, 'rtl');
+      if (design.length === 0) {
+        throw new BuildError('NO_SOURCES', 'No Verilog source files in srcs/rtl. Add a design source first.');
       }
 
-      this.broadcastProgress(project.id, 'compile', 30, `Found ${verilogFiles.length} source file(s)`);
+      const top = topModule || project.top_module || null;
+      const result = await this.exec(project, iverilog.path, [
+        '-g2012', '-Wall',
+        ...(top ? ['-s', top] : []),
+        '-o', path.join(buildDir, 'design.vvp'),
+        ...this.includeArgs(project),
+        ...this.rel(project, design)
+      ]);
 
-      // Create build output directory
-      const buildDir = path.join(project.path, '.webvado', 'build');
-      await fs.ensureDir(buildDir);
+      const diagnostics = this.parseIverilog(result.all);
+      const success = result.exitCode === 0 && !diagnostics.some(d => d.severity === 'error');
+      await this.recordStatus(project, 'last_compile', { success, errors: diagnostics.filter(d => d.severity === 'error').length });
+      if (!success) {
+        throw new BuildError('COMPILE_FAILED', 'Compilation failed', { diagnostics, log: result.all });
+      }
+      return { success: true, diagnostics, log: result.all };
+    });
+  }
 
-      const outFile = path.join(buildDir, 'design.vvp');
-
-      this.broadcastProgress(project.id, 'compile', 50, 'Compiling with iverilog...');
-
-      // Build iverilog command
-      const args = [
-        '-g2012',          // SystemVerilog-2012 standard
-        '-Wall',           // All warnings
-        '-o', outFile,
-        ...verilogFiles
-      ];
-
-      if (topModule) {
-        args.unshift('-s', topModule); // Specify top module
+  /** Compile design + testbench, run vvp, parse the VCD the testbench dumps. */
+  async simulate(projectId, { topModule, runTime } = {}) {
+    return this.withBuild(projectId, 'simulate', async (project, buildDir) => {
+      const iverilog = await this.toolchainManager.requireTool('iverilog');
+      const vvp = await this.toolchainManager.requireTool('vvp');
+      const design = await this.sources(project, 'rtl');
+      const benches = await this.sources(project, 'sim');
+      if (benches.length === 0) {
+        throw new BuildError('NO_TESTBENCH',
+          'No testbench in srcs/sim. Add a simulation source (Add Sources > Simulation source) that calls $dumpfile/$dumpvars.');
       }
 
-      logger.info({ project: project.name, files: verilogFiles, topModule }, 'Starting iverilog compilation');
-
-      // Run iverilog
-      const result = await execa('iverilog', args, {
-        cwd: project.path,
-        timeout: 60000,
-        reject: false,
-        all: true
-      });
-
-      this.broadcastProgress(project.id, 'compile', 90, 'Parsing compilation output...');
-
-      // Parse errors and warnings
-      const diagnostics = this.parseErrors(result.stderr || result.stdout || '');
-
-      const hasErrors = diagnostics.some(d => d.severity === 'error');
-
-      if (hasErrors || result.exitCode !== 0) {
-        this.broadcastProgress(project.id, 'compile', 100, 'Compilation failed');
-        
-        this.broadcast(project.id, 'build:complete', {
-          stage: 'compile',
-          success: false,
-          errors: diagnostics,
-          exitCode: result.exitCode
-        });
-
-        await this.projectManager.updateProject(project.id, {
-          build_status: {
-            last_compile: {
-              success: false,
-              timestamp: new Date().toISOString(),
-              errors: diagnostics
-            }
-          }
-        });
-
-        return {
-          success: false,
-          diagnostics,
-          exitCode: result.exitCode
-        };
+      const simTop = topModule || await this.findTestbenchTop(benches);
+      const duration = runTime === undefined ? 1000 : Number(runTime);
+      if (!Number.isInteger(duration) || duration <= 0 || duration > 1e9) {
+        throw new BuildError('INVALID_INPUT', 'runTime must be a positive integer (max 1e9 ns)');
+      }
+      const timer = path.join(buildDir, 'webvado_timer.v');
+      await fs.writeFile(timer, '`timescale 1ns/1ps\n' +
+        `module __webvado_timer; initial begin #${duration}; $finish; end endmodule\n`);
+      const vvpFile = path.join(buildDir, 'sim.vvp');
+      const compile = await this.exec(project, iverilog.path, [
+        '-g2012', '-Wall',
+        ...(simTop ? ['-s', simTop] : []), '-s', '__webvado_timer',
+        '-o', vvpFile,
+        ...this.includeArgs(project),
+        ...this.rel(project, [...design, ...benches, timer])
+      ]);
+      const diagnostics = this.parseIverilog(compile.all);
+      if (compile.exitCode !== 0 || diagnostics.some(d => d.severity === 'error')) {
+        await this.recordStatus(project, 'last_simulate', { success: false });
+        throw new BuildError('COMPILE_FAILED', 'Testbench compilation failed', { diagnostics, log: compile.all });
       }
 
-      // Success
-      this.broadcastProgress(project.id, 'compile', 100, 'Compilation successful');
-      
-      this.broadcast(project.id, 'build:complete', {
-        stage: 'compile',
-        success: true,
-        errors: diagnostics, // May contain warnings
-        outputFile: path.relative(project.path, outFile)
-      });
+      // Remove old dumps so a stale VCD is never shown as the new result
+      for (const f of await fs.readdir(buildDir)) {
+        if (f.endsWith('.vcd')) await fs.remove(path.join(buildDir, f));
+      }
 
-      await this.projectManager.updateProject(project.id, {
-        build_status: {
-          last_compile: {
-            success: true,
-            timestamp: new Date().toISOString(),
-            warnings: diagnostics.filter(d => d.severity === 'warning')
-          }
-        }
-      });
+      // A separate simulation root limits simulated nanoseconds, even for forever clocks.
+      const run = await this.exec(project, vvp.path, ['-n', vvpFile], { cwd: buildDir, timeout: 120000 });
+      if (run.timedOut) {
+        throw new BuildError('SIM_TIMEOUT', 'Simulation did not finish within 120 s. Make sure the testbench calls $finish.', { log: run.all });
+      }
+      if (run.exitCode !== 0) {
+        throw new BuildError('SIM_FAILED', `vvp exited with code ${run.exitCode}`, { diagnostics, log: run.all });
+      }
 
-      logger.info({ project: project.name, outputFile: outFile }, 'Compilation successful');
+      const vcd = (await fs.readdir(buildDir)).find(f => f.endsWith('.vcd'));
+      if (!vcd) {
+        throw new BuildError('NO_VCD',
+          'Simulation ran but produced no VCD. Add $dumpfile("simulation.vcd"); $dumpvars(0, <tb>); to the testbench.',
+          { log: run.all });
+      }
 
+      const waveformData = parseVCD(await fs.readFile(path.join(buildDir, vcd), 'utf8'));
+      await this.recordStatus(project, 'last_simulate', { success: true, signals: waveformData.signals.length });
       return {
         success: true,
+        top: simTop,
         diagnostics,
-        outputFile: path.relative(project.path, outFile)
-      };
-
-    } catch (error) {
-      this.broadcast(project.id, 'build:error', {
-        stage: 'compile',
-        error: error.message
-      });
-
-      logger.error({ project: project.name, error }, 'Compilation failed with exception');
-      throw error;
-    } finally {
-      this.activeBuilds.delete(project.id);
-    }
-  }
-
-  /**
-   * Run simulation with vvp and generate VCD output
-   * @param {string} projectId - Project ID or name
-   * @param {Object} options - Simulation options
-   * @param {string} options.topModule - Top module (for reference)
-   * @param {number} options.runTime - Simulation time in nanoseconds (default: 1000000)
-   * @returns {Promise<Object>} Simulation result with VCD data
-   */
-  async simulate(projectId, { topModule, runTime = 1000000 } = {}) {
-    const project = await this.projectManager.getProject(projectId);
-    if (!project) {
-      throw new Error(`Project "${projectId}" not found`);
-    }
-
-    const buildDir = path.join(project.path, '.webvado', 'build');
-    const vvpFile = path.join(buildDir, 'design.vvp');
-
-    // Check if compiled file exists
-    if (!await fs.pathExists(vvpFile)) {
-      throw new Error('Design not compiled. Run compilation first.');
-    }
-
-    this.activeBuilds.set(project.id, { stage: 'simulate', startTime: Date.now() });
-
-    try {
-      this.broadcastProgress(project.id, 'simulate', 10, 'Starting simulation...');
-
-      const vcdFile = path.join(buildDir, 'simulation.vcd');
-
-      // Check if testbench generates VCD (assume it does via $dumpfile/$dumpvars)
-      // If not, we'd need to inject it, but that's complex - assume testbench handles it
-
-      logger.info({ project: project.name, runTime }, 'Starting vvp simulation');
-
-      this.broadcastProgress(project.id, 'simulate', 30, 'Running vvp simulation...');
-
-      // Run vvp
-      const result = await execa('vvp', [vvpFile], {
-        cwd: buildDir,
-        timeout: 60000,
-        reject: false,
-        all: true
-      });
-
-      this.broadcastProgress(project.id, 'simulate', 70, 'Simulation complete, parsing VCD...');
-
-      if (result.exitCode !== 0) {
-        throw new Error(`Simulation failed: ${result.stderr || result.stdout}`);
-      }
-
-      // Check if VCD was generated
-      if (!await fs.pathExists(vcdFile)) {
-        // VCD file might have a different name specified in testbench
-        // Try to find any .vcd file in build dir
-        const files = await fs.readdir(buildDir);
-        const vcdFiles = files.filter(f => f.endsWith('.vcd'));
-        
-        if (vcdFiles.length === 0) {
-          throw new Error('No VCD file generated. Ensure your testbench includes $dumpfile and $dumpvars.');
-        }
-
-        // Use the first VCD found
-        const foundVcd = path.join(buildDir, vcdFiles[0]);
-        logger.info({ vcdFile: foundVcd }, 'Found VCD file');
-        
-        // Copy to expected location
-        await fs.copy(foundVcd, vcdFile);
-      }
-
-      this.broadcastProgress(project.id, 'simulate', 90, 'Parsing waveform data...');
-
-      // Parse VCD file
-      const vcdContent = await fs.readFile(vcdFile, 'utf8');
-      const waveformData = parseVCD(vcdContent);
-
-      this.broadcastProgress(project.id, 'simulate', 100, 'Simulation complete');
-
-      this.broadcast(project.id, 'build:complete', {
-        stage: 'simulate',
-        success: true,
-        signals: waveformData.signals.length
-      });
-
-      await this.projectManager.updateProject(project.id, {
-        build_status: {
-          ...project.build_status,
-          last_simulate: {
-            success: true,
-            timestamp: new Date().toISOString(),
-            signals: waveformData.signals.length
-          }
-        }
-      });
-
-      logger.info({ project: project.name, signals: waveformData.signals.length }, 'Simulation successful');
-
-      return {
-        success: true,
+        output: run.all.trim(),
+        log: [compile.all, run.all].filter(Boolean).join('\n'),
+        runTime: duration,
         waveformData,
-        vcdFile: path.relative(project.path, vcdFile)
+        vcdFile: path.posix.join('.webvado/build', vcd)
       };
+    });
+  }
 
+  /** Synthesize design sources with Yosys and return a cell utilization report. */
+  async synthesize(projectId, { topModule } = {}) {
+    return this.withBuild(projectId, 'synthesize', async (project, buildDir) => {
+      const yosys = await this.toolchainManager.requireTool('yosys');
+      const design = await this.sources(project, 'rtl');
+      if (design.length === 0) {
+        throw new BuildError('NO_SOURCES', 'No Verilog source files in srcs/rtl. Add a design source first.');
+      }
+
+      const family = this.family(project.part);
+      const top = topModule || project.top_module || null;
+      const statFile = path.join(buildDir, 'synth_stat.json');
+      await this.invalidate(buildDir, [...SYNTH_OUTPUTS, ...IMPLEMENT_OUTPUTS, ...BITSTREAM_OUTPUTS]);
+      const fingerprint = await this.fingerprint(project);
+
+      const read = this.rel(project, design).map(f => `read_verilog -sv -Isrcs/rtl ${this.quote(f)}`).join('; ');
+      const synth = `${SYNTH_BY_FAMILY[family]} ${top ? `-top ${top}` : ''}`;
+      const script = [
+        read,
+        `hierarchy -check ${top ? `-top ${top}` : '-auto-top'}`,
+        synth,
+        `write_json ${this.quote(path.join(buildDir, 'synth.json'))}`,
+        `tee -q -o ${this.quote(statFile)} stat -json`
+      ].join('; ');
+
+      const result = await this.exec(project, yosys.path, ['-p', script], { timeout: 300000 });
+      const diagnostics = this.parseYosys(result.all);
+      if (result.exitCode !== 0) {
+        await this.recordStatus(project, 'last_synthesis', { success: false });
+        throw new BuildError('SYNTH_FAILED', 'Synthesis failed', {
+          diagnostics: diagnostics.length ? diagnostics : [{ severity: 'error', file: null, line: null, message: result.all.trim().split('\n').pop() || 'yosys failed' }],
+          log: result.all
+        });
+      }
+
+      const netlist = await fs.readJson(path.join(buildDir, 'synth.json'));
+      const report = this.parseStat(await fs.readJson(statFile), family);
+      report.top = Object.entries(netlist.modules).find(([, module]) => Number(module.attributes?.top) === 1)?.[0] || report.top;
+      if (fingerprint !== await this.fingerprint(await this.requireProject(project.id))) {
+        throw new BuildError('SOURCE_CHANGED', 'Design changed during synthesis. Run synthesis again.');
+      }
+      await fs.writeJson(path.join(buildDir, 'synthesis-config.json'), { fingerprint, top: report.top });
+      await this.recordStatus(project, 'last_synthesis', { success: true, top: report.top, cells: report.cells });
+      return { success: true, diagnostics, log: result.all.trim(), report,
+        artifacts: await this.artifacts(project, ['synth.json', 'synth_stat.json']) };
+    });
+  }
+
+  device(project, options = {}) {
+    const devices = { ice40hx8k: { chip: 'hx8k', package: 'ct256' }, ice40up5k: { chip: 'up5k', package: 'sg48' } };
+    const device = devices[String(project.part).toLowerCase()];
+    if (!device) throw new BuildError('UNSUPPORTED_DEVICE',
+      'Physical implementation supports ice40hx8k/ct256 and ice40up5k/sg48. ECP5 and other devices are synthesis-only.');
+    const pkg = options.package || project.settings?.package || device.package;
+    if (pkg !== device.package) throw new BuildError('INVALID_INPUT', `${project.part} currently supports package ${device.package}`);
+    const frequency = Number(options.frequency ?? project.settings?.target_frequency_mhz ?? 50);
+    if (!Number.isFinite(frequency) || frequency <= 0 || frequency > 1000) {
+      throw new BuildError('INVALID_INPUT', 'frequency must be greater than 0 and at most 1000 MHz');
+    }
+    return { ...device, package: pkg, frequency, part: project.part };
+  }
+
+  async implement(projectId, options = {}) {
+    return this.withBuild(projectId, 'implement', async (project, buildDir) => {
+      const device = this.device(project, options);
+      await this.invalidate(buildDir, [...IMPLEMENT_OUTPUTS, ...BITSTREAM_OUTPUTS]);
+      const fingerprint = await this.fingerprint(project, true);
+      if (!await fs.pathExists(path.join(buildDir, 'synth.json'))) {
+        throw new BuildError('PREREQUISITE_MISSING', 'Run synthesis successfully before implementation.');
+      }
+      const synthesis = await fs.readJson(path.join(buildDir, 'synthesis-config.json')).catch(() => null);
+      if (synthesis?.fingerprint !== await this.fingerprint(project)) {
+        throw new BuildError('PREREQUISITE_MISSING', 'Design sources or device settings changed. Run synthesis again.');
+      }
+      const tool = await this.toolchainManager.requireTool('nextpnr-ice40');
+      const constraints = (await this.findFiles(path.join(project.path, 'srcs/constrs'), new Set(['.pcf'])));
+      const pcf = path.join(buildDir, 'constraints.pcf');
+      if (constraints.length) await fs.writeFile(pcf, (await Promise.all(constraints.map(f => fs.readFile(f, 'utf8')))).join('\n'));
+      const args = [`--${device.chip}`, '--package', device.package, '--freq', String(device.frequency),
+        '--json', path.join(buildDir, 'synth.json'), '--asc', path.join(buildDir, 'implementation.asc'),
+        '--report', path.join(buildDir, 'implementation.json'),
+        ...(constraints.length ? ['--pcf', pcf] : ['--pcf-allow-unconstrained'])];
+      const run = await this.exec(project, tool.path, args, { timeout: 300000 });
+      if (run.exitCode !== 0) {
+        await this.invalidate(buildDir, ['implementation.asc', 'implementation.json']);
+        throw new BuildError('IMPLEMENT_FAILED', 'Place and route failed', { log: run.all });
+      }
+      if (fingerprint !== await this.fingerprint(await this.requireProject(project.id), true)) {
+        throw new BuildError('SOURCE_CHANGED', 'Design changed during implementation. Run synthesis and implementation again.');
+      }
+      await fs.writeJson(path.join(buildDir, 'implementation-config.json'), { ...device, fingerprint });
+      const report = { ...await fs.readJson(path.join(buildDir, 'implementation.json')), ...device,
+        unconstrained: constraints.length === 0 };
+      await this.recordStatus(project, 'last_implementation', { success: true, ...device });
+      return { success: true, log: run.all, report,
+        artifacts: await this.artifacts(project, ['implementation.asc', 'implementation.json']) };
+    });
+  }
+
+  async bitstream(projectId, options = {}) {
+    return this.withBuild(projectId, 'bitstream', async (project, buildDir) => {
+      const device = this.device(project, options);
+      await fs.remove(path.join(buildDir, 'bitstream.bin'));
+      const configPath = path.join(buildDir, 'implementation-config.json');
+      if (!await fs.pathExists(configPath) || !await fs.pathExists(path.join(buildDir, 'implementation.asc'))) {
+        throw new BuildError('PREREQUISITE_MISSING', 'Run implementation successfully before generating a bitstream.');
+      }
+      const config = await fs.readJson(configPath);
+      if (config.part !== device.part || config.package !== device.package || config.frequency !== device.frequency || config.fingerprint !== await this.fingerprint(project, true)) {
+        throw new BuildError('PREREQUISITE_MISSING', 'Implementation settings changed. Run implementation again with these settings.');
+      }
+      const tool = await this.toolchainManager.requireTool('icepack');
+      const run = await this.exec(project, tool.path, [path.join(buildDir, 'implementation.asc'), path.join(buildDir, 'bitstream.bin')]);
+      if (run.exitCode !== 0) {
+        await fs.remove(path.join(buildDir, 'bitstream.bin'));
+        throw new BuildError('BITSTREAM_FAILED', 'Bitstream generation failed', { log: run.all });
+      }
+      const artifacts = await this.artifacts(project, ['bitstream.bin']);
+      if (config.fingerprint !== await this.fingerprint(await this.requireProject(project.id), true)) {
+        throw new BuildError('SOURCE_CHANGED', 'Design changed during bitstream generation. Rebuild the project.');
+      }
+      const digest = createHash('sha256').update(await fs.readFile(path.join(buildDir, 'bitstream.bin'))).digest('hex');
+      await fs.writeJson(path.join(buildDir, 'bitstream-config.json'), { ...config, digest,
+        settings: project.settings, created: new Date().toISOString() });
+      await this.recordStatus(project, 'last_bitstream', { success: true, ...device });
+      return { success: true, log: run.all || `icepack generated bitstream.bin (${artifacts[0].size} bytes)`,
+        report: { ...device, bytes: artifacts[0].size }, artifacts };
+    });
+  }
+
+  async invalidate(buildDir, names) {
+    await Promise.all(names.map(name => fs.remove(path.join(buildDir, name))));
+  }
+
+  async clearStage(buildDir, stage) {
+    const names = stage === 'compile' ? ['design.vvp', ...SYNTH_OUTPUTS, ...IMPLEMENT_OUTPUTS, ...BITSTREAM_OUTPUTS]
+      : stage === 'synthesize' ? [...SYNTH_OUTPUTS, ...IMPLEMENT_OUTPUTS, ...BITSTREAM_OUTPUTS]
+      : stage === 'implement' ? [...IMPLEMENT_OUTPUTS, ...BITSTREAM_OUTPUTS]
+      : stage === 'bitstream' ? BITSTREAM_OUTPUTS
+      : stage === 'simulate' ? ['sim.vvp', ...(await fs.readdir(buildDir)).filter(name => name.endsWith('.vcd'))] : [];
+    await this.invalidate(buildDir, names);
+  }
+
+  async requireFreshBitstream(projectId) {
+    const project = await this.requireProject(projectId);
+    if (this.activeBuilds.has(project.id)) throw new BuildError('BUILD_BUSY', 'A build is in progress');
+    const file = await this.artifactPath(project.id, 'bitstream.bin');
+    const manifest = await fs.readJson(path.join(path.dirname(file), 'bitstream-config.json')).catch(() => null);
+    const digest = createHash('sha256').update(await fs.readFile(file)).digest('hex');
+    if (!manifest || manifest.fingerprint !== await this.fingerprint(project, true) || manifest.digest !== digest ||
+        JSON.stringify(manifest.settings) !== JSON.stringify(project.settings)) {
+      throw new BuildError('PREREQUISITE_MISSING', 'Bitstream is stale. Rebuild synthesis, implementation and bitstream.');
+    }
+    return file;
+  }
+
+  async fingerprint(project, constraints = false) {
+    const files = await this.findFiles(path.join(project.path, 'srcs/rtl'), new Set(['.v', '.sv', '.vh', '.svh']));
+    if (constraints) files.push(...await this.findFiles(path.join(project.path, 'srcs/constrs'), new Set(['.pcf'])));
+    const hash = createHash('sha256').update(JSON.stringify([project.part, project.top_module]));
+    for (const file of files.sort()) hash.update(path.relative(project.path, file)).update('\0').update(await fs.readFile(file)).update('\0');
+    return hash.digest('hex');
+  }
+
+  async artifactPath(projectId, name) {
+    const project = await this.requireProject(projectId);
+    if (typeof name !== 'string' || !/^[A-Za-z0-9_.-]+$/.test(name) || name === '.' || name === '..') {
+      throw new BuildError('INVALID_ARTIFACT', 'Invalid artifact name');
+    }
+    const buildDir = await this.buildDirectory(project);
+    const file = path.join(buildDir, name);
+    let stat;
+    try { stat = await fs.lstat(file); } catch (error) {
+      if (error.code === 'ENOENT') throw new BuildError('ARTIFACT_NOT_FOUND', `Artifact ${name} not found`);
+      throw error;
+    }
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new BuildError('INVALID_ARTIFACT', 'Artifact must be a regular file');
+    return file;
+  }
+
+  async getNetlist(projectId) {
+    return fs.readJson(await this.artifactPath(projectId, 'synth.json'));
+  }
+
+  async artifacts(project, names) {
+    return Promise.all(names.map(async name => {
+      const stat = await fs.stat(await this.artifactPath(project.id, name));
+      return { name, path: `.webvado/build/${name}`, size: stat.size, type: path.extname(name).slice(1),
+        modified: stat.mtime.toISOString(), url: `/api/build/${encodeURIComponent(project.id)}/artifacts/${encodeURIComponent(name)}` };
+    }));
+  }
+
+  async buildDirectory(project) {
+    for (const relative of ['.webvado', '.webvado/build']) {
+      const target = path.join(project.path, relative);
+      try {
+        if ((await fs.lstat(target)).isSymbolicLink()) throw new BuildError('INVALID_ARTIFACT', 'Build directory cannot be a symlink');
+      } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
+    const buildDir = path.join(project.path, '.webvado/build');
+    if (await fs.pathExists(buildDir)) {
+      if ((await fs.readdir(buildDir, { withFileTypes: true })).some(entry => entry.isSymbolicLink())) {
+        throw new BuildError('INVALID_ARTIFACT', 'Build directory cannot contain symlinks');
+      }
+    }
+    return buildDir;
+  }
+
+  async getBuildStatus(projectId) {
+    const project = await this.requireProject(projectId);
+    const active = this.activeBuilds.get(project.id);
+    return { active: !!active, stage: active?.stage || null, history: project.build_status || {} };
+  }
+
+  // ── Helpers ─────────────────────────────────────────────────────
+
+  async requireProject(projectId) {
+    const project = await this.projectManager.getProject(projectId);
+    if (!project) throw new BuildError('PROJECT_NOT_FOUND', `Project "${projectId}" not found`);
+    return project;
+  }
+
+  // One build per project at a time; progress over WebSocket
+  async withBuild(projectId, stage, fn) {
+    const project = await this.requireProject(projectId);
+    if (project.top_module && !/^[A-Za-z_][\w$]{0,127}$/.test(project.top_module)) {
+      throw new BuildError('INVALID_INPUT', 'Project top_module must be a Verilog identifier');
+    }
+    if (this.activeBuilds.has(project.id)) {
+      throw new BuildError('BUILD_BUSY', `A ${this.activeBuilds.get(project.id).stage} run is already in progress`);
+    }
+    this.activeBuilds.set(project.id, { stage, startTime: Date.now() });
+    this.broadcast(project.id, 'build:progress', { stage, percent: 0 });
+    let buildDir;
+    try {
+      buildDir = await this.buildDirectory(project);
+      await fs.ensureDir(buildDir);
+      if (stage !== 'compile') await this.clearStage(buildDir, stage);
+      const result = await fn(project, buildDir);
+      await fs.writeFile(path.join(buildDir, `${stage}.log`), result.log || '');
+      this.broadcast(project.id, 'build:complete', { stage, success: true });
+      logger.info({ project: project.name, stage }, 'Build step succeeded');
+      return result;
     } catch (error) {
-      this.broadcast(project.id, 'build:error', {
-        stage: 'simulate',
-        error: error.message
-      });
-
-      logger.error({ project: project.name, error }, 'Simulation failed');
+      if (buildDir) {
+        await this.clearStage(buildDir, stage);
+        await fs.writeFile(path.join(buildDir, `${stage}.log`), error.log || error.message);
+      }
+      const key = { compile: 'last_compile', simulate: 'last_simulate', synthesize: 'last_synthesis', implement: 'last_implementation', bitstream: 'last_bitstream' }[stage];
+      if (key) await this.recordStatus(project, key, { success: false });
+      this.broadcast(project.id, 'build:complete', { stage, success: false, error: error.message });
+      logger.warn({ project: project.name, stage, code: error.code, message: error.message }, 'Build step failed');
       throw error;
     } finally {
       this.activeBuilds.delete(project.id);
     }
   }
 
-  /**
-   * Parse iverilog stderr output into structured diagnostics
-   * @param {string} stderr - iverilog stderr output
-   * @returns {Array} Array of diagnostic objects
-   */
-  parseErrors(stderr) {
-    if (!stderr || stderr.trim().length === 0) {
-      return [];
-    }
+  async exec(project, file, args, { cwd = project.path, timeout = 60000 } = {}) {
+    const result = await execa(file, args, {
+      cwd,
+      timeout,
+      reject: false,
+      all: true,
+      env: this.toolchainManager.env()
+    });
+    const output = result.all || '';
+    return { ...result, all: output.length > MAX_LOG ? `[Earlier log truncated]\n${output.slice(-MAX_LOG)}` : output };
+  }
 
+  async sources(project, sub) {
+    return this.findFiles(path.join(project.path, 'srcs', sub));
+  }
+
+  async findFiles(dir, extensions = HDL_EXT) {
+    if (!await fs.pathExists(dir)) return [];
+    const out = [];
+    for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) out.push(...await this.findFiles(full, extensions));
+      else if (entry.isFile() && extensions.has(path.extname(entry.name).toLowerCase())) out.push(full);
+    }
+    return out.sort();
+  }
+
+  // .vh headers are found through include paths, not compiled on their own
+  includeArgs() {
+    return ['-I', 'srcs/rtl', '-I', 'srcs/sim'];
+  }
+
+  rel(project, files) {
+    return files.map(f => path.relative(project.path, f));
+  }
+
+  quote(s) {
+    return `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  }
+
+  family(part = '') {
+    if (/^ice40/i.test(part)) return 'ice40';
+    if (/^ecp5/i.test(part)) return 'ecp5';
+    return 'generic';
+  }
+
+  // First testbench module that is not instantiated by another testbench file
+  async findTestbenchTop(benches) {
+    const modules = [];
+    const text = (await Promise.all(benches.map(f => fs.readFile(f, 'utf8')))).join('\n');
+    const clean = text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+    for (const m of clean.matchAll(/^\s*module\s+([A-Za-z_][\w$]*)/gm)) modules.push(m[1]);
+    const instantiated = new Set(modules.filter(name =>
+      new RegExp(`^\\s*${name}\\s*(#\\s*\\(|[A-Za-z_][\\w$]*\\s*\\()`, 'm').test(clean)));
+    return modules.find(m => !instantiated.has(m)) || modules[0] || null;
+  }
+
+  async recordStatus(project, key, data) {
+    try {
+      const fresh = await this.projectManager.getProject(project.id);
+      await this.projectManager.updateProject(project.id, {
+        build_status: { ...(fresh?.build_status || {}), [key]: { ...data, timestamp: new Date().toISOString() } }
+      });
+    } catch (error) {
+      logger.warn({ error: error.message }, 'Failed to record build status');
+    }
+  }
+
+  /** "srcs/rtl/a.v:12: error: msg" and "srcs/rtl/a.v:12: syntax error" */
+  parseIverilog(output = '') {
     const diagnostics = [];
-    const lines = stderr.split('\n');
-
-    for (const line of lines) {
-      // Format: "file.v:line: error: message"
-      // or     "file.v:line: warning: message"
-      const match = line.match(/^(.+?):(\d+):\s*(error|warning):\s*(.+)$/);
-      
-      if (match) {
-        const [, file, lineNum, severity, message] = match;
-        diagnostics.push({
-          file: path.basename(file),
-          line: parseInt(lineNum, 10),
-          col: null,
-          severity: severity.toLowerCase(),
-          message: message.trim()
-        });
-      } else if (line.trim().length > 0 && !line.startsWith(' ')) {
-        // Some messages don't have file:line format - treat as info
-        if (line.includes('error') || line.includes('Error')) {
-          diagnostics.push({
-            file: null,
-            line: null,
-            col: null,
-            severity: 'error',
-            message: line.trim()
-          });
-        } else if (line.includes('warning') || line.includes('Warning')) {
-          diagnostics.push({
-            file: null,
-            line: null,
-            col: null,
-            severity: 'warning',
-            message: line.trim()
-          });
-        }
-      }
+    for (const line of output.split('\n')) {
+      const m = line.match(/^(.+?):(\d+):\s*(?:(error|warning|sorry):\s*)?(.+)$/i);
+      if (!m) continue;
+      const [, file, lineNum, kind, message] = m;
+      const severity = /warning/i.test(kind || '') ? 'warning'
+        : (kind || /error/i.test(message)) ? 'error' : null;
+      if (!severity) continue;
+      diagnostics.push({ file: path.basename(file), path: file, line: parseInt(lineNum, 10), severity, message: message.trim() });
     }
-
+    if (!diagnostics.length && /error/i.test(output)) {
+      const first = output.split('\n').find(l => /error/i.test(l));
+      diagnostics.push({ file: null, path: null, line: null, severity: 'error', message: first.trim() });
+    }
     return diagnostics;
   }
 
-  /**
-   * Find all Verilog files in a directory recursively
-   * @private
-   */
-  async _findVerilogFiles(dir) {
-    const files = [];
-
-    if (!await fs.pathExists(dir)) {
-      return files;
-    }
-
-    const entries = await fs.readdir(dir, { withFileTypes: true });
-
-    for (const entry of entries) {
-      const fullPath = path.join(dir, entry.name);
-      
-      if (entry.isDirectory()) {
-        const subFiles = await this._findVerilogFiles(fullPath);
-        files.push(...subFiles);
-      } else if (entry.isFile()) {
-        const ext = path.extname(entry.name).toLowerCase();
-        if (ext === '.v' || ext === '.sv' || ext === '.vh') {
-          files.push(fullPath);
-        }
+  /** "srcs/rtl/a.v:12: ERROR: msg" / "Warning: msg" */
+  parseYosys(output = '') {
+    const diagnostics = [];
+    for (const line of output.split('\n')) {
+      let m = line.match(/^(.+?\.s?v):(\d+):\s*(ERROR|Warning):\s*(.+)$/i);
+      if (m) {
+        diagnostics.push({ file: path.basename(m[1]), path: m[1], line: parseInt(m[2], 10), severity: /error/i.test(m[3]) ? 'error' : 'warning', message: m[4].trim() });
+        continue;
       }
+      m = line.match(/^(ERROR|Warning):\s*(.+)$/);
+      if (m) diagnostics.push({ file: null, path: null, line: null, severity: m[1] === 'ERROR' ? 'error' : 'warning', message: m[2].trim() });
     }
-
-    return files;
+    return diagnostics;
   }
 
-  /**
-   * Broadcast build progress via WebSocket
-   * @param {string} projectId - Project ID
-   * @param {string} stage - Build stage (compile, simulate, etc.)
-   * @param {number} percent - Progress percentage (0-100)
-   * @param {string} message - Progress message
-   */
-  broadcastProgress(projectId, stage, percent, message) {
-    this.broadcast(projectId, 'build:progress', {
-      stage,
-      percent,
-      message
-    });
-
-    this.broadcast(projectId, 'build:log', {
-      level: 'info',
-      message
-    });
-
-    logger.debug({ projectId, stage, percent, message }, 'Build progress');
-  }
-
-  /**
-   * Broadcast a message via WebSocket manager
-   * @param {string} projectId - Project ID
-   * @param {string} type - Message type
-   * @param {Object} payload - Message payload
-   */
-  broadcast(projectId, type, payload) {
-    if (this.wsManager) {
-      this.wsManager.broadcast(projectId, type, payload);
-    }
-  }
-
-  /**
-   * Get current build status for a project
-   * @param {string} projectId - Project ID or name
-   * @returns {Promise<Object>}
-   */
-  async getBuildStatus(projectId) {
-    const project = await this.projectManager.getProject(projectId);
-    if (!project) {
-      throw new Error(`Project "${projectId}" not found`);
-    }
-
-    const activeBuild = this.activeBuilds.get(project.id);
-
+  parseStat(stat, family) {
+    const modules = stat.modules || {};
+    const top = Object.keys(modules).find(name => modules[name]?.top) || Object.keys(modules).pop() || '';
+    const mod = (stat.design && stat.design.num_cells !== undefined) ? stat.design : modules[top] || {};
+    const cellTypes = mod.num_cells_by_type || {};
     return {
-      active: !!activeBuild,
-      stage: activeBuild?.stage || null,
-      history: project.build_status || {}
+      top: top.replace(/^\\/, ''),
+      family,
+      cells: mod.num_cells ?? Object.values(cellTypes).reduce((a, b) => a + b, 0),
+      wires: mod.num_wires ?? 0,
+      cellTypes: Object.fromEntries(Object.entries(cellTypes).sort((a, b) => b[1] - a[1]))
     };
+  }
+
+  broadcast(projectId, type, payload) {
+    this.wsManager?.broadcast(projectId, type, payload);
   }
 }
 

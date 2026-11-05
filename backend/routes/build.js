@@ -1,293 +1,146 @@
 import express from 'express';
-import path from 'path';
+import fs from 'fs-extra';
 
 const router = express.Router();
 
-/**
- * POST /api/build/:projectId/compile - Compile Verilog sources
- */
-router.post('/:projectId/compile', async (req, res) => {
-  try {
-    const { projectId } = req.params;
-    const { topModule } = req.body;
+// HTTP status per BuildError code; anything else is a 500
+const STATUS = {
+  PROJECT_NOT_FOUND: 404,
+  TOOL_MISSING: 424,
+  NO_SOURCES: 400,
+  NO_TESTBENCH: 400,
+  NO_VCD: 422,
+  COMPILE_FAILED: 422,
+  SIM_FAILED: 422,
+  SIM_TIMEOUT: 422,
+  SYNTH_FAILED: 422,
+  IMPLEMENT_FAILED: 422,
+  BITSTREAM_FAILED: 422,
+  PREREQUISITE_MISSING: 409,
+  UNSUPPORTED_DEVICE: 422,
+  ARTIFACT_NOT_FOUND: 404,
+  INVALID_ARTIFACT: 403,
+  BUILD_BUSY: 409,
+  SOURCE_CHANGED: 409,
+  INVALID_PROJECT_ID: 400,
+  INVALID_INPUT: 400
+};
+
+const MODULE_NAME = /^[A-Za-z_][\w$]{0,127}$/;
+
+function validate(req) {
+  const { projectId } = req.params;
+  if (!projectId || projectId.includes('..') || projectId.includes('/')) {
+    return { code: 'INVALID_PROJECT_ID', message: 'Invalid project identifier' };
+  }
+  const { topModule, runTime, package: pkg, frequency } = req.body || {};
+  if (topModule !== undefined && topModule !== null && topModule !== '' && (typeof topModule !== 'string' || !MODULE_NAME.test(topModule))) {
+    return { code: 'INVALID_INPUT', message: 'topModule must be a Verilog identifier' };
+  }
+  if (pkg !== undefined && (typeof pkg !== 'string' || !/^[A-Za-z][A-Za-z0-9]{1,20}$/.test(pkg))) {
+    return { code: 'INVALID_INPUT', message: 'package must be a valid device package name' };
+  }
+  if (frequency !== undefined && (!['number', 'string'].includes(typeof frequency) || !Number.isFinite(Number(frequency)) || Number(frequency) <= 0 || Number(frequency) > 1000)) {
+    return { code: 'INVALID_INPUT', message: 'frequency must be greater than 0 and at most 1000 MHz' };
+  }
+  if (runTime !== undefined) {
+    const n = Number(runTime);
+    if (!Number.isInteger(n) || n <= 0 || n > 1e9) {
+      return { code: 'INVALID_INPUT', message: 'runTime must be a positive integer (max 1e9 ns)' };
+    }
+  }
+  return null;
+}
+
+function sendError(res, error) {
+  const status = STATUS[error.code] || 500;
+  res.status(status).json({
+    success: false,
+    error: { code: error.code || 'BUILD_ERROR', message: error.message },
+    diagnostics: error.diagnostics || [],
+    log: error.log || ''
+  });
+}
+
+// POST /api/build/:projectId/<step> — runs one build step
+function step(name, run) {
+  router.post(`/:projectId/${name}`, async (req, res) => {
+    const invalid = validate(req);
+    if (invalid) return sendError(res, invalid);
 
     const buildService = req.app.locals.buildService;
-    if (!buildService) {
-      return res.status(500).json({
-        error: {
-          code: 'SERVICE_UNAVAILABLE',
-          message: 'Build service not initialized'
-        }
+    const { topModule, runTime, package: pkg, frequency } = req.body || {};
+    try {
+      const result = await run(buildService, req.params.projectId, {
+        topModule: topModule || undefined,
+        runTime: runTime !== undefined ? Number(runTime) : undefined,
+        package: pkg,
+        frequency: frequency !== undefined ? Number(frequency) : undefined
       });
+      res.json(result);
+    } catch (error) {
+      sendError(res, error);
     }
+  });
+}
 
-    // Validate projectId to prevent path traversal
-    if (!projectId || typeof projectId !== 'string' || projectId.includes('..') || projectId.includes('/')) {
-      return res.status(400).json({
-        error: {
-          code: 'INVALID_PROJECT_ID',
-          message: 'Invalid project identifier'
-        }
-      });
-    }
+step('compile', (svc, id, opts) => svc.compile(id, opts));
+step('simulate', (svc, id, opts) => svc.simulate(id, opts));
+step('synthesize', (svc, id, opts) => svc.synthesize(id, opts));
+step('implement', (svc, id, opts) => svc.implement(id, opts));
+step('bitstream', (svc, id, opts) => svc.bitstream(id, opts));
 
-    const result = await buildService.compile(projectId, { topModule });
+router.get('/:projectId/netlist', async (req, res) => {
+  try {
+    res.json({ success: true, netlist: await req.app.locals.buildService.getNetlist(req.params.projectId) });
+  } catch (error) { sendError(res, error); }
+});
 
-    if (result.success) {
-      res.json({
-        success: true,
-        message: 'Compilation successful',
-        diagnostics: result.diagnostics,
-        outputFile: result.outputFile
-      });
-    } else {
-      res.status(422).json({
-        success: false,
-        message: 'Compilation failed',
-        diagnostics: result.diagnostics,
-        exitCode: result.exitCode
-      });
-    }
-  } catch (error) {
-    if (error.message.includes('not found')) {
-      return res.status(404).json({
-        error: {
-          code: 'PROJECT_NOT_FOUND',
-          message: error.message
-        }
-      });
-    }
-
-    if (error.message.includes('not installed')) {
-      return res.status(424).json({
-        error: {
-          code: 'TOOL_MISSING',
-          message: error.message
-        }
-      });
-    }
-
-    res.status(500).json({
-      error: {
-        code: 'COMPILATION_ERROR',
-        message: error.message
-      }
-    });
-  }
+router.get('/:projectId/artifacts/:name', async (req, res) => {
+  try {
+    const service = req.app.locals.buildService;
+    const file = req.params.name === 'bitstream.bin'
+      ? await service.requireFreshBitstream(req.params.projectId)
+      : await service.artifactPath(req.params.projectId, req.params.name);
+    res.download(file, req.params.name);
+  } catch (error) { sendError(res, error); }
 });
 
 /**
- * POST /api/build/:projectId/simulate - Run simulation and generate VCD
- */
-router.post('/:projectId/simulate', async (req, res) => {
-  try {
-    const { projectId } = req.params;
-    const { topModule, runTime } = req.body;
-
-    const buildService = req.app.locals.buildService;
-    if (!buildService) {
-      return res.status(500).json({
-        error: {
-          code: 'SERVICE_UNAVAILABLE',
-          message: 'Build service not initialized'
-        }
-      });
-    }
-
-    // Validate projectId
-    if (!projectId || typeof projectId !== 'string' || projectId.includes('..') || projectId.includes('/')) {
-      return res.status(400).json({
-        error: {
-          code: 'INVALID_PROJECT_ID',
-          message: 'Invalid project identifier'
-        }
-      });
-    }
-
-    // Validate runTime if provided
-    if (runTime !== undefined) {
-      const parsedRunTime = parseInt(runTime, 10);
-      if (isNaN(parsedRunTime) || parsedRunTime <= 0 || parsedRunTime > 1e9) {
-        return res.status(400).json({
-          error: {
-            code: 'INVALID_RUN_TIME',
-            message: 'Run time must be a positive integer (max 1e9 ns)'
-          }
-        });
-      }
-    }
-
-    const result = await buildService.simulate(projectId, { 
-      topModule, 
-      runTime: runTime ? parseInt(runTime, 10) : undefined 
-    });
-
-    res.json({
-      success: true,
-      message: 'Simulation successful',
-      waveformData: result.waveformData,
-      vcdFile: result.vcdFile
-    });
-
-  } catch (error) {
-    if (error.message.includes('not found')) {
-      return res.status(404).json({
-        error: {
-          code: 'PROJECT_NOT_FOUND',
-          message: error.message
-        }
-      });
-    }
-
-    if (error.message.includes('not compiled')) {
-      return res.status(400).json({
-        error: {
-          code: 'NOT_COMPILED',
-          message: error.message
-        }
-      });
-    }
-
-    res.status(500).json({
-      error: {
-        code: 'SIMULATION_ERROR',
-        message: error.message
-      }
-    });
-  }
-});
-
-/**
- * GET /api/build/:projectId/status - Get current build status
+ * GET /api/build/:projectId/status - Current build status
  */
 router.get('/:projectId/status', async (req, res) => {
+  const invalid = validate(req);
+  if (invalid) return sendError(res, invalid);
   try {
-    const { projectId } = req.params;
-
-    const buildService = req.app.locals.buildService;
-    if (!buildService) {
-      return res.status(500).json({
-        error: {
-          code: 'SERVICE_UNAVAILABLE',
-          message: 'Build service not initialized'
-        }
-      });
-    }
-
-    // Validate projectId
-    if (!projectId || typeof projectId !== 'string' || projectId.includes('..') || projectId.includes('/')) {
-      return res.status(400).json({
-        error: {
-          code: 'INVALID_PROJECT_ID',
-          message: 'Invalid project identifier'
-        }
-      });
-    }
-
-    const status = await buildService.getBuildStatus(projectId);
-
-    res.json(status);
-
+    res.json(await req.app.locals.buildService.getBuildStatus(req.params.projectId));
   } catch (error) {
-    if (error.message.includes('not found')) {
-      return res.status(404).json({
-        error: {
-          code: 'PROJECT_NOT_FOUND',
-          message: error.message
-        }
-      });
-    }
-
-    res.status(500).json({
-      error: {
-        code: 'STATUS_ERROR',
-        message: error.message
-      }
-    });
+    sendError(res, error);
   }
 });
 
 /**
- * GET /api/build/:projectId/reports - List build reports and artifacts
+ * GET /api/build/:projectId/reports - List build artifacts
  */
 router.get('/:projectId/reports', async (req, res) => {
+  const invalid = validate(req);
+  if (invalid) return sendError(res, invalid);
   try {
-    const { projectId } = req.params;
+    const project = await req.app.locals.projectManager.getProject(req.params.projectId);
+    if (!project) return sendError(res, { code: 'PROJECT_NOT_FOUND', message: `Project "${req.params.projectId}" not found` });
 
-    const projectManager = req.app.locals.projectManager;
-    if (!projectManager) {
-      return res.status(500).json({
-        error: {
-          code: 'SERVICE_UNAVAILABLE',
-          message: 'Project manager not initialized'
-        }
-      });
-    }
+    const buildDir = await req.app.locals.buildService.buildDirectory(project);
+    if (!await fs.pathExists(buildDir)) return res.json({ reports: [], artifacts: [], all: [] });
 
-    // Validate projectId
-    if (!projectId || typeof projectId !== 'string' || projectId.includes('..') || projectId.includes('/')) {
-      return res.status(400).json({
-        error: {
-          code: 'INVALID_PROJECT_ID',
-          message: 'Invalid project identifier'
-        }
-      });
-    }
-
-    const project = await projectManager.getProject(projectId);
-    if (!project) {
-      return res.status(404).json({
-        error: {
-          code: 'PROJECT_NOT_FOUND',
-          message: `Project "${projectId}" not found`
-        }
-      });
-    }
-
-    const buildDir = path.join(project.path, '.webvado', 'build');
-    
-    // Check if build directory exists
-    const fs = await import('fs-extra');
-    if (!await fs.pathExists(buildDir)) {
-      return res.json({
-        reports: [],
-        artifacts: []
-      });
-    }
-
-    // List files in build directory
-    const files = await fs.readdir(buildDir);
-    const stats = await Promise.all(
-      files.map(async (file) => {
-        const filePath = path.join(buildDir, file);
-        const stat = await fs.stat(filePath);
-        return {
-          name: file,
-          path: path.relative(project.path, filePath),
-          size: stat.size,
-          modified: stat.mtime.toISOString(),
-          type: path.extname(file).substring(1) || 'file'
-        };
-      })
-    );
-
-    // Categorize files
-    const reports = stats.filter(f => f.type === 'txt' || f.type === 'log' || f.type === 'rpt');
-    const artifacts = stats.filter(f => f.type === 'vvp' || f.type === 'vcd' || f.type === 'bin');
-
+    const names = (await fs.readdir(buildDir, { withFileTypes: true })).filter(e => e.isFile()).map(e => e.name);
+    const all = await req.app.locals.buildService.artifacts(project, names);
     res.json({
-      reports,
-      artifacts,
-      all: stats
+      reports: all.filter(f => ['txt', 'log', 'rpt'].includes(f.type) || f.name.startsWith('synth_stat')),
+      artifacts: all.filter(f => ['vvp', 'vcd', 'bin', 'json', 'asc'].includes(f.type)),
+      all
     });
-
   } catch (error) {
-    res.status(500).json({
-      error: {
-        code: 'LIST_ERROR',
-        message: error.message
-      }
-    });
+    sendError(res, error);
   }
 });
 

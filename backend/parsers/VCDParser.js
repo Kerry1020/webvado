@@ -23,7 +23,8 @@
  * @returns {Object} Parsed VCD data with signals and timing
  */
 export function parseVCD(vcdContent) {
-  const lines = vcdContent.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+  const lines = vcdContent.replace(/\$(timescale|scope|upscope|var)\b[\s\S]*?\$end/g,
+    directive => directive.replace(/\s+/g, ' ')).split('\n').map(line => line.trim()).filter(line => line.length > 0);
   
   const result = {
     timescale: '1ns', // Default
@@ -32,6 +33,7 @@ export function parseVCD(vcdContent) {
   };
 
   const symbolMap = new Map(); // Maps VCD symbol (!, #, etc.) to signal object
+  const scope = [];
   let currentTime = 0;
   let inDumpvars = false;
 
@@ -40,13 +42,21 @@ export function parseVCD(vcdContent) {
 
     // Parse timescale
     if (line.startsWith('$timescale')) {
-      const match = line.match(/\$timescale\s+(\S+)\s+\$end/);
+      const match = line.match(/\$timescale\s+(\d+)\s*(s|ms|us|ns|ps|fs)\s+\$end/);
       if (match) {
-        result.timescale = match[1];
+        result.timescale = match[1] + match[2];
       }
       continue;
     }
 
+    if (line.startsWith('$scope')) {
+      scope.push(line.split(/\s+/)[2]);
+      continue;
+    }
+    if (line.startsWith('$upscope')) {
+      scope.pop();
+      continue;
+    }
     // Parse variable declarations
     if (line.startsWith('$var')) {
       // $var <type> <width> <symbol> <name> $end
@@ -54,14 +64,14 @@ export function parseVCD(vcdContent) {
       if (match) {
         const [, type, width, symbol, name] = match;
         const signal = {
-          id: name,
-          name: name,
+          id: [...scope, name].join('.'),
+          name: [...scope, name].join('.'),
           type: type,
           width: parseInt(width, 10),
-          values: []
+          values: symbolMap.get(symbol)?.values || []
         };
         result.signals.push(signal);
-        symbolMap.set(symbol, signal);
+        if (!symbolMap.has(symbol)) symbolMap.set(symbol, signal);
       }
       continue;
     }

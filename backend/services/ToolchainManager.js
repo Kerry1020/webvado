@@ -1,7 +1,19 @@
 import { execa } from 'execa';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import pino from 'pino';
 
 const logger = pino({ name: 'ToolchainManager' });
+
+// Toolchain bundled inside the repo (not committed): tools/oss-cad-suite/bin.
+// WEBVADO_TOOLCHAIN overrides it. Searched before the system PATH.
+// dist/ builds keep the directory tree, so the repo-level tools/ is one level up from dist.
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const BUNDLED_BIN = [
+  path.join(ROOT, 'tools', 'oss-cad-suite', 'bin'),
+  path.join(ROOT, '..', 'tools', 'oss-cad-suite', 'bin')
+].find(dir => fs.existsSync(dir)) || path.join(ROOT, 'tools', 'oss-cad-suite', 'bin');
 
 /**
  * ToolchainManager detects and manages hardware toolchain installations
@@ -9,9 +21,16 @@ const logger = pino({ name: 'ToolchainManager' });
  */
 export class ToolchainManager {
   constructor() {
+    this.bin = path.resolve(process.env.WEBVADO_TOOLCHAIN || BUNDLED_BIN);
     this.cache = null;
     this.cacheTime = null;
     this.cacheTTL = 60000; // 1 minute cache
+  }
+
+  /** Environment for child processes: bundled toolchain first on PATH */
+  env() {
+    const dirs = fs.existsSync(this.bin) ? [this.bin] : [];
+    return { ...process.env, PATH: [...dirs, process.env.PATH].join(path.delimiter) };
   }
 
   /**
@@ -24,15 +43,22 @@ export class ToolchainManager {
       return this.cache;
     }
 
-    const tools = {
-      iverilog: await this._detectTool('iverilog', ['-V'], /Icarus Verilog version ([\d.]+)/),
-      verilator: await this._detectTool('verilator', ['--version'], /Verilator ([\d.]+)/),
-      yosys: await this._detectTool('yosys', ['-V'], /Yosys ([\d.]+)/),
-      'nextpnr-ice40': await this._detectTool('nextpnr-ice40', ['--version'], /nextpnr-ice40.*?--\s+([\d.]+)/),
-      'nextpnr-ecp5': await this._detectTool('nextpnr-ecp5', ['--version'], /nextpnr-ecp5.*?--\s+([\d.]+)/),
-      icepack: await this._detectTool('icepack', ['-h'], /IceStorm/), // icepack doesn't have --version
-      iceprog: await this._detectTool('iceprog', ['-h'], /iceprog/)
+    const specs = {
+      iverilog: [['-V'], /Icarus Verilog version ([\d.]+)/],
+      vvp: [['-V'], /Icarus Verilog runtime version ([\d.]+)/],
+      verilator: [['--version'], /Verilator ([\d.]+)/],
+      yosys: [['-V'], /Yosys ([\d.+\w-]+)/],
+      'nextpnr-ice40': [['--version'], /--\s+(\S+)/],
+      'nextpnr-ecp5': [['--version'], /--\s+(\S+)/],
+      icepack: [['-h'], /()icepack/i],
+      iceprog: [['-h'], /()iceprog/],
+      openFPGALoader: [['--version'], /openFPGALoader\s+(?:v(?:ersion)?\s*)?([^\s]+)/i]
     };
+
+    const env = this.env();
+    const entries = await Promise.all(Object.entries(specs).map(async ([name, [args, re]]) =>
+      [name, await this._detectTool(name, args, re, env)]));
+    const tools = Object.fromEntries(entries);
 
     this.cache = tools;
     this.cacheTime = Date.now();
@@ -46,43 +72,28 @@ export class ToolchainManager {
    * Detect a single tool
    * @private
    */
-  async _detectTool(name, versionArgs, versionRegex) {
+  async _detectTool(name, versionArgs, versionRegex, env) {
     try {
-      // First check if tool exists in PATH
-      const whichResult = await execa('which', [name], {
-        timeout: 5000,
-        reject: false
-      });
-
+      const whichResult = await execa('which', [name], { timeout: 5000, reject: false, env });
       if (whichResult.exitCode !== 0) {
         return { found: false, path: null, version: null };
       }
 
-      const path = whichResult.stdout.trim();
-
-      // Try to get version
-      let version = null;
+      const toolPath = whichResult.stdout.trim();
+      let version = 'unknown';
       try {
-        const versionResult = await execa(name, versionArgs, {
-          timeout: 5000,
-          reject: false,
-          all: true
-        });
-
-        const output = versionResult.all || versionResult.stdout || versionResult.stderr || '';
-        const match = output.match(versionRegex);
-        if (match) {
-          version = match[1] || 'detected';
-        } else {
-          version = 'unknown';
+        const versionResult = await execa(toolPath, versionArgs, { timeout: 10000, reject: false, all: true, env });
+        const match = (versionResult.all || '').match(versionRegex);
+        if (versionResult.timedOut || !match) {
+          return { found: false, path: toolPath, version: null, error: (versionResult.all || 'Tool could not run').slice(0, 1000) };
         }
+        version = match[1] || 'detected';
       } catch (versionErr) {
-        // Tool exists but version detection failed
-        version = 'unknown';
         logger.warn({ tool: name, error: versionErr.message }, 'Failed to detect version');
+        return { found: false, path: toolPath, version: null, error: versionErr.message };
       }
 
-      return { found: true, path, version };
+      return { found: true, path: toolPath, version, bundled: toolPath.startsWith(this.bin + path.sep) };
     } catch (err) {
       logger.debug({ tool: name, error: err.message }, 'Tool not found');
       return { found: false, path: null, version: null };
@@ -109,10 +120,9 @@ export class ToolchainManager {
     const tool = tools[name];
 
     if (!tool || !tool.found) {
-      throw new Error(
-        `Required tool '${name}' is not installed or not in PATH. ` +
-        `Please install it before proceeding.`
-      );
+      const err = new Error(`Required tool '${name}' is not installed or not in PATH.`);
+      err.code = 'TOOL_MISSING';
+      throw err;
     }
 
     return tool;

@@ -27,7 +27,7 @@ const logger = pino({
 
 // Create Express app
 const app = express();
-const { app: wsApp } = expressWs(app);
+expressWs(app);
 
 // Middleware
 app.use(cors());
@@ -68,8 +68,9 @@ import { ProjectManager } from './services/ProjectManager.js';
 import { ToolchainManager } from './services/ToolchainManager.js';
 import { WebSocketManager } from './services/WebSocketManager.js';
 import { BuildService } from './services/BuildService.js';
+import { HardwareService } from './services/HardwareService.js';
 
-const projectsDir = path.join(__dirname, '../projects');
+const projectsDir = path.resolve(process.env.WEBVADO_PROJECTS_DIR || path.join(__dirname, '../projects'));
 const projectManager = new ProjectManager(projectsDir);
 const toolchainManager = new ToolchainManager();
 const wsManager = new WebSocketManager();
@@ -80,6 +81,9 @@ app.locals.projectManager = projectManager;
 app.locals.toolchainManager = toolchainManager;
 app.locals.wsManager = wsManager;
 app.locals.buildService = buildService;
+app.locals.hardwareService = new HardwareService(projectManager, toolchainManager, {
+  requireFresh: projectId => buildService.requireFreshBitstream(projectId)
+});
 
 logger.info('Services initialized');
 
@@ -88,11 +92,13 @@ import projectRoutes from './routes/projects.js';
 import filesRoutes from './routes/files.js';
 import buildRoutes from './routes/build.js';
 import toolsRoutes from './routes/tools.js';
+import hardwareRoutes from './routes/hardware.js';
 
 app.use('/api/projects', projectRoutes);
 app.use('/api/files', filesRoutes);
 app.use('/api/build', buildRoutes);
 app.use('/api/tools', toolsRoutes);
+app.use('/api/hardware', hardwareRoutes);
 
 // WebSocket endpoint for real-time updates
 app.ws('/ws/projects/:id', (ws, req) => {
@@ -127,12 +133,18 @@ app.ws('/ws/projects/:id', (ws, req) => {
 });
 
 // Catch-all route - serve index.html for SPA routing
+app.use('/api', (req, res) => {
+  res.status(404).json({ error: { code: 'NOT_FOUND', message: 'API endpoint not found' } });
+});
 app.get('*', (req, res) => {
+  if (path.extname(req.path) || !req.accepts('html')) {
+    return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'File not found' } });
+  }
   res.sendFile(path.join(frontendPath, 'index.html'));
 });
 
 // Error handler
-app.use((err, req, res, next) => {
+app.use((err, req, res, _next) => {
   logger.error({ err, url: req.url, method: req.method }, 'Unhandled error');
   
   res.status(err.status || 500).json({
@@ -145,13 +157,13 @@ app.use((err, req, res, next) => {
 
 // Start server
 const PORT = process.env.PORT || 3000;
-const server = app.listen(PORT, () => {
-  logger.info(`🚀 WebVado server running on http://localhost:${PORT}`);
+export const server = app.listen(PORT, () => {
+  logger.info(`🚀 WebVado server running on http://localhost:${server.address().port}`);
   logger.info(`📁 Serving frontend from ${frontendPath}`);
   logger.info(`🔧 Environment: ${process.env.NODE_ENV || 'development'}`);
   
   // Open browser automatically in development
-  if (process.env.NODE_ENV !== 'production') {
+  if (process.env.NODE_ENV === 'development') {
     import('open').then(({ default: open }) => {
       open(`http://localhost:${PORT}`).catch(() => {
         logger.warn('Failed to open browser automatically');

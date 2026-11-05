@@ -1,18 +1,9 @@
 import express from 'express';
-import { ProjectManager } from '../services/ProjectManager.js';
 import { FileManager } from '../services/FileManager.js';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const router = express.Router();
-
-// Initialize managers
-const projectsDir = path.join(__dirname, '../../projects');
-const projectManager = new ProjectManager(projectsDir);
-const fileManager = new FileManager(projectsDir);
+const fileManager = new FileManager();
+const pm = req => req.app.locals.projectManager;
 
 /**
  * GET /api/files/:projectId/*
@@ -23,7 +14,7 @@ router.get('/:projectId/*', async (req, res, next) => {
     const { projectId } = req.params;
     const filePath = req.params[0]; // Wildcard captures the rest of the path
 
-    const project = await projectManager.getProject(projectId);
+    const project = await pm(req).getProject(projectId);
     if (!project) {
       return res.status(404).json({ error: `Project "${projectId}" not found` });
     }
@@ -49,13 +40,13 @@ router.post('/:projectId/*', async (req, res, next) => {
   try {
     const { projectId } = req.params;
     const filePath = req.params[0];
-    const { content } = req.body;
+    const { content } = req.body || {};
 
-    if (content === undefined) {
-      return res.status(400).json({ error: 'Missing required field: content' });
+    if (typeof content !== 'string') {
+      return res.status(400).json({ error: 'content must be a string' });
     }
 
-    const project = await projectManager.getProject(projectId);
+    const project = await pm(req).getProject(projectId);
     if (!project) {
       return res.status(404).json({ error: `Project "${projectId}" not found` });
     }
@@ -81,17 +72,18 @@ router.put('/:projectId/*', async (req, res, next) => {
   try {
     const { projectId } = req.params;
     const filePath = req.params[0];
-    const { content } = req.body;
+    const { content } = req.body || {};
 
-    if (content === undefined) {
-      return res.status(400).json({ error: 'Missing required field: content' });
+    if (typeof content !== 'string') {
+      return res.status(400).json({ error: 'content must be a string' });
     }
 
-    const project = await projectManager.getProject(projectId);
+    const project = await pm(req).getProject(projectId);
     if (!project) {
       return res.status(404).json({ error: `Project "${projectId}" not found` });
     }
 
+    await fileManager.readFile(project.path, filePath);
     const file = await fileManager.writeFile(project.path, filePath, content);
     res.json(file);
   } catch (error) {
@@ -114,7 +106,7 @@ router.delete('/:projectId/*', async (req, res, next) => {
     const { projectId } = req.params;
     const filePath = req.params[0];
 
-    const project = await projectManager.getProject(projectId);
+    const project = await pm(req).getProject(projectId);
     if (!project) {
       return res.status(404).json({ error: `Project "${projectId}" not found` });
     }
