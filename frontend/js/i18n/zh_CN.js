@@ -59,7 +59,10 @@ export const zh_CN = {
     sources: '源文件',
     console: '控制台',
     
-    about: '关于 WebVado'
+    about: '关于 WebVado',
+    language: '语言',
+    projectSummary: '工程概要',
+    documentation: '文档'
   },
 
   // 标题栏
@@ -70,6 +73,8 @@ export const zh_CN = {
 
   // 状态栏
   status: {
+    implementing: '正在运行实现...',
+    generatingBitstream: '正在生成位流...',
     ready: '就绪',
     noProject: '未打开工程',
     project: '工程: {name}',
@@ -80,6 +85,19 @@ export const zh_CN = {
     compiled: '编译完成',
     simulating: '仿真中...',
     simulated: '仿真完成'
+  },
+  netlist: {
+    module: '网表模块', graph: '综合网表图',
+    zoomIn: '放大', zoomOut: '缩小', fit: '适应窗口', empty: '网表中没有模块',
+    hint: '拖动画布平移，滚轮缩放；选择单元查看端口、连线和参数。',
+    timing: '时序', resources: '资源利用率'
+  },
+  hardware: {
+    board: '开发板', automatic: '自动检测', cable: '连接线（可选）', serial: '序列号（可选）',
+    target: '编程目标', loading: '正在加载支持的开发板...', ready: '请选择开发板或连接线。可先检测，再主动点击编程以烧录当前位流。',
+    selectBoard: '编程前请选择开发板或输入连接线。', detect: '检测', program: '编程',
+    detecting: '正在检测硬件...', programming: '正在编程设备...', detected: '已检测到硬件。',
+    programmed: '设备编程成功。', notDetected: '未检测到硬件，请检查连接及开发板/连接线选择。'
   },
 
   // 对话框
@@ -195,8 +213,8 @@ export const zh_CN = {
 
   // Flow Navigator
   flowNav: {
-    projectManager: 'PROJECT MANAGER',
-    ipIntegrator: 'IP INTEGRATOR',
+    projectManager: '工程管理',
+    ipIntegrator: 'IP 集成',
     simulation: '仿真',
     rtlAnalysis: 'RTL 分析',
     synthesis: '综合',
@@ -240,20 +258,66 @@ export const zh_CN = {
     createFile: '创建文件',
     addFile: '添加文件',
     setAsTop: '设为顶层模块',
-    remove: '移除'
+    remove: '移除',
+    open: '打开',
+    noFiles: '无文件',
+    addSourcesTitle: '添加源文件',
+    fileType: '文件类型:',
+    typeDesign: '设计源文件 (srcs/rtl)',
+    typeConstraint: '约束文件 (srcs/constrs)',
+    typeSimulation: '仿真源文件 (srcs/sim)',
+    fileName: '文件名:',
+    fileNamePlaceholder: 'top.v',
+    addExisting: '添加已有文件...',
+    invalidFileName: '只能用字母、数字、_ - .，并带扩展名，如 .v',
+    searchTitle: '搜索源文件',
+    searchPrompt: '文件名包含:',
+    removeConfirm: '从工程中移除 {name}？文件会从磁盘删除。'
   },
 
   // 编辑器
   editor: {
-    welcome: 'WebVado',
-    welcomeMessage: '打开或创建一个工程开始使用。',
+    findTerm: '查找：', replaceWith: '替换为：', replaceAll: '全部替换', findNext: '查找下一个',
+    notFound: '未找到“{term}”', replaced: '已替换 {count} 处',
+    welcome: '欢迎使用 WebVado',
+    welcomeMessage: '开源 FPGA 开发环境',
     newProject: '新建工程',
-    openProject: '打开工程',
-    unsavedChanges: '未保存的更改'
+    openProject: '打开已有工程',
+    unsavedChanges: '未保存的更改',
+    noFile: '未打开文件',
+    examples: '示例工程',
+    github: 'GitHub 仓库'
+  },
+
+  // 面板与标签页
+  panel: {
+    flowNavigator: 'Flow Navigator',
+    sources: '源文件',
+    netlist: '网表',
+    compileOrder: '编译顺序',
+    tclConsole: 'Tcl 控制台',
+    messages: '消息',
+    logs: '日志',
+    reports: '报告',
+    refresh: '刷新',
+    clear: '清空',
+    scrollBottom: '滚动到底部',
+    commandPlaceholder: '在此输入命令',
+    status: '状态:',
+    minimize: '最小化',
+    maximize: '最大化',
+    close: '关闭'
   },
 
   // 消息
   messages: {
+    saveAgain: '保存过程中编辑器内容发生变化，请保存最新修改后再构建。',
+    implSuccess: '布局布线实现成功。',
+    bitstreamSuccess: '位流生成成功。',
+    runImplementationFirst: '请先运行实现。',
+    runSynthesisFirst: '请先运行综合，再查看生成的网表。',
+    clipboardUnavailable: '剪贴板不可用，请手动选择并复制模板。',
+    featureUnavailable: '尚未实现：当前工具链集成暂不支持此功能。',
     projectCreated: '工程 "{name}" 已创建 ({id})',
     projectOpened: '已打开工程: {name}',
     projectClosed: '工程已关闭。',
@@ -274,7 +338,13 @@ export const zh_CN = {
     errorOpenFile: '打开文件失败: {message}',
     errorSaveFile: '保存文件失败: {message}',
     errorCreateProject: '创建工程失败: {message}',
-    errorLoadProjects: '加载工程失败: {message}'
+    errorLoadProjects: '加载工程失败: {message}',
+    noProjectOpen: '请先打开或新建一个工程。',
+    notAvailableTitle: '{feature}',
+    notAvailable: '{feature} 需要 {tool}，WebVado 目前还没有集成。',
+    toolchainMissing: '本机没有安装 {tool}。安装方法: {command}',
+    unsavedConfirm: '{name} 有未保存的修改，确定放弃？',
+    discard: '放弃修改'
   }
 };
 

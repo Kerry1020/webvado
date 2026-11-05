@@ -1,434 +1,531 @@
 /**
- * WebVado Frontend Entry Point - Updated with all UI components
+ * WebVado frontend entry point.
+ * Wires window chrome (UIManager), panels and dialogs to backend actions.
+ * Flow actions (simulation, synthesis, ...) live in flow/FlowActions.js.
  */
 
 import { UIManager } from './ui/UIManager.js';
 import { APIClient } from './api/APIClient.js';
 import { EventBus } from './core/EventBus.js';
 import { ProjectManager } from './managers/ProjectManager.js';
-import { EditorManager } from './managers/EditorManager.js';
 import { ConsoleManager } from './managers/ConsoleManager.js';
 import { FlowNavigator } from './components/FlowNavigator.js';
 import { Dialog } from './components/Dialog.js';
 import { NewProjectDialog } from './components/dialogs/NewProjectDialog.js';
-import { SettingsDialog } from './components/dialogs/SettingsDialog.js';
+import { SettingsDialog, loadSettings } from './components/dialogs/SettingsDialog.js';
 import { AboutDialog } from './components/dialogs/AboutDialog.js';
-import { WaveformViewer } from './components/WaveformViewer.js';
 import { CodeEditor } from './editor/CodeEditor.js';
 import { SourcesPanel } from './components/SourcesPanel.js';
+import { FlowActions } from './flow/FlowActions.js';
 import i18n from './i18n/index.js';
+
+const t = (key, params) => i18n.t(key, params);
 
 class WebVadoApp {
   constructor() {
     this.eventBus = new EventBus();
     this.apiClient = new APIClient();
-    this.uiManager = null;
-    this.projectManager = null;
-    this.editorManager = null;
-    this.consoleManager = null;
-    this.flowNavigator = null;
-    this.sourcesPanel = null;
-    this.codeEditor = null;
-    this.waveformViewer = null;
+    this.currentProject = null;
     this.initialized = false;
-    this.currentProjectId = null;
+    this.saveQueue = Promise.resolve();
+    this.navigationVersion = 0;
   }
 
-  async init() {
-    // Always show the app first — never block on health check
-    this.showApp();
+  get currentProjectId() {
+    return this.currentProject?.id || null;
+  }
+
+  init() {
+    clearTimeout(window.__wvFallback);
+    document.getElementById('loadingScreen')?.remove();
 
     try {
-      // Initialize all managers
-      this.uiManager        = new UIManager(this.eventBus);
-      this.projectManager   = new ProjectManager(this.apiClient, this.eventBus);
-      this.editorManager    = new EditorManager(this.eventBus);
-      this.consoleManager   = new ConsoleManager(this.eventBus);
-      this.flowNavigator    = new FlowNavigator(this.eventBus);
-      this.sourcesPanel     = new SourcesPanel(this.eventBus, this.apiClient);
+      this.uiManager = new UIManager(this.eventBus);
+      this.projectManager = new ProjectManager(this.apiClient, this.eventBus);
+      this.consoleManager = new ConsoleManager(this.eventBus);
+      this.flowNavigator = new FlowNavigator(this.eventBus);
+      this.sourcesPanel = new SourcesPanel(this.eventBus, this.apiClient);
 
       this.uiManager.init();
       this.consoleManager.init();
       this.flowNavigator.init();
       this.sourcesPanel.init();
+      this.codeEditor = new CodeEditor(document.getElementById('editorBody'));
+      this.codeEditor.applySettings(loadSettings());
+      this.codeEditor.requestClose = async () => {
+        if (await this.confirmDiscard()) {
+          clearTimeout(this.autoSaveTimer);
+          this.codeEditor.close();
+        }
+      };
+      this.codeEditor.onChange(() => this.scheduleAutoSave());
+      this.flow = new FlowActions(this);
 
-      // Initialize code editor
-      const editorContainer = document.getElementById('editorBody');
-      if (editorContainer) {
-        this.codeEditor = new CodeEditor(editorContainer);
-      }
-
-      // Wire up all action handlers
+      i18n.apply();
+      this.updateLanguageIndicator();
       this.setupEventListeners();
       this.setupKeyboardShortcuts();
-      
-      // Set the language indicator
-      this.updateLanguageIndicator();
+      this.registerConsoleCommands();
+      this.renderProjectState();
 
-      // Welcome messages
-      this.consoleManager.log('WebVado 0.1.0 (Alpha)', 'info');
-      this.consoleManager.log('Copyright 2026 WebVado Contributors', 'info');
-      this.consoleManager.log('', 'info');
-      this.consoleManager.log('输入 "help" 查看可用命令', 'info');
-
-      // Background health check — just logs, never blocks
+      this.consoleManager.log(t('console.welcome', { version: '0.1.0' }), 'info');
+      this.consoleManager.log(t('console.copyright'), 'info');
+      this.consoleManager.log(t('console.helpPrompt'), 'info');
       this.pingBackend();
+
+      window.addEventListener('beforeunload', (e) => {
+        if (this.codeEditor.isDirty() || this.pendingSaves) {
+          e.preventDefault();
+          e.returnValue = '';
+        }
+      });
 
       this.initialized = true;
     } catch (err) {
       console.error('[WebVado] Init error:', err);
-      // App is already visible; show error in status bar
       const sb = document.getElementById('statusBarText');
       if (sb) sb.textContent = `Init error: ${err.message}`;
     }
   }
 
-  /** Non-blocking backend ping */
   async pingBackend() {
     try {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 3000);
-      const res = await fetch('/api/health', { signal: ctrl.signal });
-      clearTimeout(timer);
-      if (res.ok) {
-        this.consoleManager?.log('INFO: Backend connected (http://localhost:3000)', 'success');
-        this.uiManager?.setStatusBar('Ready');
-      }
+      const res = await fetch('/api/health', { signal: AbortSignal.timeout(3000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      this.consoleManager.log(`INFO: Backend connected (${location.origin})`, 'success');
     } catch {
-      this.consoleManager?.log(
-        'WARN: Backend not reachable — run: npm start', 'warning'
-      );
-      this.uiManager?.setStatusBar('Backend offline');
+      this.consoleManager.log('WARN: Backend not reachable. Start it with: npm start', 'warning');
+      this.uiManager.setStatusBar('Backend offline');
     }
   }
 
-  showApp() {
-    clearTimeout(window.__wvFallback);
-    const ls = document.getElementById('loadingScreen');
-    if (ls) ls.remove();
-  }
-  
-  updateLanguageIndicator() {
-    const current = i18n.getLocale();
-    const langSpan = document.getElementById('currentLang');
-    if (langSpan) {
-      langSpan.textContent = current === 'en-US' ? 'EN' : '中文';
-    }
-  }
-
-  // ── Event Listeners ─────────────────────────────────────────
+  // ── Wiring ──────────────────────────────────────────────────
 
   setupEventListeners() {
-    this.eventBus.on('action:new-project',         () => this.handleNewProject());
-    this.eventBus.on('action:open-project',        () => this.handleOpenProject());
-    this.eventBus.on('action:save-project',        () => this.handleSaveProject());
-    this.eventBus.on('action:close-project',       () => this.handleCloseProject());
-    this.eventBus.on('action:run-synthesis',       () => this.handleRunSynthesis());
-    this.eventBus.on('action:run-simulation',      () => this.handleRunSimulation());
-    this.eventBus.on('action:generate-bitstream',  () => this.handleGenerateBitstream());
-    this.eventBus.on('action:settings',            () => this.handleSettings());
-    this.eventBus.on('action:about',               () => this.handleAbout());
-    this.eventBus.on('action:toggle-language',     () => this.handleToggleLanguage());
-    this.eventBus.on('action:minimize',            () => this.handleMinimize());
-    this.eventBus.on('action:maximize',            () => this.handleMaximize());
-    this.eventBus.on('action:close',               () => this.handleClose());
-    
-    // Editor events
-    this.eventBus.on('editor:open-file',           (data) => this.handleOpenFile(data));
+    const on = (action, fn) => this.eventBus.on(`action:${action}`, fn);
+
+    // File
+    on('new-project', () => this.handleNewProject());
+    on('open-project', () => this.handleOpenProject());
+    on('save-project', () => this.handleSave());
+    on('close-project', () => this.handleCloseProject());
+    on('exit', () => this.handleExit());
+
+    // Edit
+    for (const cmd of ['undo', 'redo', 'cut', 'copy']) {
+      on(cmd, () => this.editCommand(cmd));
+    }
+    on('paste', () => this.handlePaste());
+    on('find', () => this.handleFind());
+
+    // Tools / Window / Help
+    on('settings', () => this.handleSettings());
+    on('sim-settings', () => this.handleSettings('simulation'));
+    on('show-summary', () => this.handleShowSummary());
+    on('about', () => AboutDialog.show());
+    on('toggle-language', () => this.handleToggleLanguage());
+    on('documentation', () => window.open('https://github.com/Kerry1020/webvado#readme', '_blank', 'noopener'));
+    on('examples', () => this.handleOpenProject());
+
+    // Title bar
+    on('minimize', () => document.getElementById('app').classList.toggle('minimized'));
+    on('maximize', () => this.handleMaximize());
+    on('close', () => this.handleExit());
+
+    // Sources panel
+    on('add-sources', () => this.sourcesPanel.showAddDialog());
+    on('refresh-sources', () => this.handleRefreshSources());
+    on('search-sources', () => this.sourcesPanel.search());
+    on('compile-order', () => document.querySelector('.tab[data-tab="compile-order"]')?.click());
+
+    // Console toolbar
+    on('clear-console', () => this.consoleManager.clear());
+    on('scroll-bottom', () => this.consoleManager.scrollToBottom());
+    on('find-in-console', () => this.handleFindInConsole());
+
+    // Panel events
+    this.eventBus.on('editor:open-file', ({ filename }) => this.openFile(filename));
+    this.eventBus.on('sources:set-top', name => this.setTopModule(name));
+    this.eventBus.on('sources:removed', path => {
+      if (this.codeEditor.filename === path) this.codeEditor.close();
+    });
+    this.sourcesPanel.beforeRemove = async path => {
+      if (this.codeEditor.filename === path && !(await this.confirmDiscard())) return false;
+      await this.saveQueue;
+      return true;
+    };
+    window.addEventListener('locale-changed', () => {
+      i18n.apply();
+      this.updateLanguageIndicator();
+      this.renderProjectState();
+    });
   }
 
   setupKeyboardShortcuts() {
     document.addEventListener('keydown', (e) => {
-      if (e.ctrlKey && e.key === 's') { e.preventDefault(); this.eventBus.emit('action:save-project'); }
-      if (e.ctrlKey && e.key === 'n') { e.preventDefault(); this.eventBus.emit('action:new-project'); }
-      if (e.ctrlKey && e.key === 'o') { e.preventDefault(); this.eventBus.emit('action:open-project'); }
-      if (e.ctrlKey && e.key === 'f') { e.preventDefault(); this.eventBus.emit('action:find'); }
-      if (e.key === 'F11')            { e.preventDefault(); this.handleMaximize(); }
+      if (document.querySelector('.dialog-overlay:not(.dialog-closing)')) return;
+      const mod = e.ctrlKey || e.metaKey;
+      const key = e.key.toLowerCase();
+      if (mod && key === 's') { e.preventDefault(); this.handleSave(); }
+      else if (mod && e.altKey && key === 'n') { e.preventDefault(); this.handleNewProject(); }
+      else if (mod && key === 'o') { e.preventDefault(); this.handleOpenProject(); }
+      else if (mod && key === 'f') { e.preventDefault(); this.handleFind(); }
+      else if (e.key === 'F11') { e.preventDefault(); this.handleMaximize(); }
     });
   }
 
-  // ── Action Handlers ─────────────────────────────────────────
+  registerConsoleCommands() {
+    const c = this.consoleManager;
+    c.register('clear', 'clear the console', () => c.clear());
+    c.register('version', 'show version', () => c.log('WebVado 0.1.0 (Alpha)', 'info'));
+    c.register('pwd', 'show the open project path', () => c.log(this.currentProject?.path || t('console.noProject'), 'info'));
+    c.register('ls', 'list project source files', () => {
+      if (!this.currentProject) return c.log(t('console.noProject'), 'warning');
+      const files = this.sourcesPanel.getFiles();
+      if (!files.length) c.log(t('sources.noFiles'), 'info');
+      files.forEach(f => c.log(`  ${f.path}`, 'info'));
+    });
+    c.register('open_project', 'open_project <name>', ([name]) => name ? this.openProject(name) : this.handleOpenProject());
+    c.register('close_project', 'close the open project', () => this.handleCloseProject());
+    c.register('save', 'save the open file', () => this.handleSave());
+    c.register('set_top', 'set_top <module>', ([name]) => this.setTopModule(name || ''));
+    c.register('check_syntax', 'compile sources with iverilog', () => this.flow.checkSyntax());
+    c.register('launch_simulation', 'run behavioral simulation', () => this.flow.runSimulation());
+    c.register('synth_design', 'run Yosys synthesis', () => this.flow.runSynthesis());
+    c.register('report_utilization', 'show the last synthesis report', () => this.flow.showReport('utilization'));
+  }
 
-  async handleNewProject() {
+  // ── Project state ───────────────────────────────────────────
+
+  renderProjectState() {
+    const p = this.currentProject;
+    this.uiManager.updateTitleBar(p ? t('title.withProject', { name: p.name, path: p.path }) : t('title.noProject'));
+    document.getElementById('statusBarProject').textContent = p ? t('status.project', { name: p.name }) : t('status.noProject');
+    document.getElementById('statusBarPart').textContent = p ? t('status.part', { part: p.part }) : '-';
+    this.uiManager.setStatusBar(t('status.ready'));
+  }
+
+  requireProject() {
+    if (this.currentProject) return true;
+    Dialog.alert(t('common.error'), t('messages.noProjectOpen'));
+    return false;
+  }
+
+  // Resolves true when it is safe to drop the editor contents
+  async confirmDiscard() {
+    clearTimeout(this.autoSaveTimer);
+    await this.saveQueue;
+    if (!this.codeEditor.isDirty()) return true;
+    return Dialog.confirm(t('editor.unsavedChanges'), t('messages.unsavedConfirm', { name: this.codeEditor.filename }), {
+      okText: t('messages.discard'),
+      cancelText: t('common.cancel')
+    });
+  }
+
+  handleNewProject() {
     NewProjectDialog.show(async (data) => {
       try {
-        const proj = await this.apiClient.post('/api/projects', {
-          name: data.name,
-          part: data.part,
-          language: data.language
-        });
-        this.consoleManager.log(`Project "${proj.name}" created (${proj.id})`, 'success');
-        this.currentProjectId = proj.id;
-        this.sourcesPanel.setProject(proj.id);
-        await this.projectManager.openProject(proj.name);
+        const proj = await this.apiClient.post('/api/projects', data);
+        this.consoleManager.log(t('messages.projectCreated', { name: proj.name, id: proj.id }), 'success');
+        await this.openProject(proj.name);
       } catch (err) {
-        this.consoleManager.log(`ERROR: ${err.message}`, 'error');
-        Dialog.alert('Error', `Failed to create project: ${err.message}`);
+        return err.message;
       }
     });
   }
 
   async handleOpenProject() {
+    let projects;
     try {
-      const projects = await this.apiClient.get('/api/projects');
-      if (!projects.projects || projects.projects.length === 0) {
-        Dialog.alert('No Projects', 'No projects found. Create one first.');
-        return;
-      }
-      
-      const projectList = projects.projects
-        .map(p => `<option value="${p.id}">${p.name} (${p.part})</option>`)
-        .join('');
-      
-      const form = document.createElement('form');
-      form.innerHTML = `
-        <div class="dialog-form-group">
-          <label for="project-select">Select project:</label>
-          <select id="project-select" name="project" required>
-            ${projectList}
-          </select>
-        </div>
-      `;
-      
-      let selectedId;
-      Dialog.show({
-        title: 'Open Project',
-        body: form,
-        buttons: [
-          { text: 'Cancel', onClick: () => {} },
-          {
-            text: 'Open',
-            primary: true,
-            onClick: () => {
-              selectedId = form.querySelector('#project-select').value;
-            }
-          }
-        ],
-        onClose: async () => {
-          if (selectedId) {
-            const proj = projects.projects.find(p => p.id === selectedId);
-            if (proj) {
-              this.currentProjectId = proj.id;
-              this.sourcesPanel.setProject(proj.id);
-              await this.projectManager.openProject(proj.name);
-              this.consoleManager.log(`Opened project: ${proj.name}`, 'success');
-            }
-          }
-        }
-      });
+      ({ projects = [] } = await this.apiClient.get('/api/projects'));
     } catch (err) {
-      Dialog.alert('Error', `Failed to load projects: ${err.message}`);
+      return Dialog.alert(t('common.error'), t('messages.errorLoadProjects', { message: err.message }));
     }
+    if (!projects.length) {
+      return Dialog.alert(t('dialog.openProject.noProjects'), t('dialog.openProject.noProjectsMessage'));
+    }
+
+    const form = document.createElement('form');
+    form.innerHTML = `
+      <div class="dialog-form-group">
+        <label for="project-select">${Dialog.escape(t('dialog.openProject.selectProject'))}</label>
+        <select id="project-select" size="${Math.min(Math.max(projects.length, 2), 8)}">
+          ${projects.map(p => `<option value="${Dialog.escape(p.name)}">${Dialog.escape(p.name)} (${Dialog.escape(p.part)})</option>`).join('')}
+        </select>
+      </div>`;
+    const select = form.querySelector('select');
+    select.selectedIndex = Math.max(0, projects.findIndex(p => p.id === this.currentProjectId));
+
+    const dialog = Dialog.show({
+      title: t('dialog.openProject.title'),
+      body: form,
+      buttons: [
+        { text: t('common.cancel') },
+        { text: t('common.open'), primary: true, onClick: () => this.openProject(select.value) }
+      ]
+    });
+    select.addEventListener('dblclick', () => dialog.querySelector('.dialog-footer .btn-primary').click());
+    form.onsubmit = (e) => { e.preventDefault(); dialog.querySelector('.dialog-footer .btn-primary').click(); };
   }
 
-  async handleSaveProject() {
-    if (!this.currentProjectId) {
-      this.consoleManager.log('No project open', 'warning');
-      return;
+  async openProject(nameOrId) {
+    if (!(await this.confirmDiscard())) return;
+    const version = ++this.navigationVersion;
+    const session = this.codeEditor.session;
+    const content = this.codeEditor.getContent();
+    try {
+      const project = await this.apiClient.get(`/api/projects/${encodeURIComponent(nameOrId)}`);
+      if (version !== this.navigationVersion) return false;
+      if ((this.codeEditor.session !== session || this.codeEditor.getContent() !== content) && !(await this.confirmDiscard())) return false;
+      this.projectManager.currentProject = project;
+      this.currentProject = project;
+      this.codeEditor.close();
+      this.flow.reset();
+      this.flowNavigator.resetProgress();
+      this.renderProjectState();
+      await this.sourcesPanel.setProject(project.id, project.top_module);
+      this.consoleManager.log(t('messages.projectOpened', { name: project.name }), 'success');
+      return true;
+    } catch (err) {
+      Dialog.alert(t('common.error'), err.message);
+      return false;
     }
-    
-    // Save current file if editor is open
-    if (this.codeEditor && this.codeEditor.filename) {
-      try {
-        const content = this.codeEditor.getContent();
-        await this.apiClient.put(`/files/${this.currentProjectId}/${this.codeEditor.filename}`, {
-          content
-        });
-        this.consoleManager.log(`Saved: ${this.codeEditor.filename}`, 'success');
-      } catch (err) {
-        this.consoleManager.log(`ERROR saving file: ${err.message}`, 'error');
-      }
-    }
-    
-    this.consoleManager.log('save_project', 'command');
-    this.consoleManager.log('Project saved.', 'success');
-    this.uiManager.setStatusBar('Saved');
-    setTimeout(() => this.uiManager.setStatusBar('Ready'), 2000);
   }
 
   async handleCloseProject() {
-    if (!this.currentProjectId) return;
-    
-    const confirm = await Dialog.confirm('Close Project', 'Close current project?');
-    if (!confirm) return;
-    
-    this.currentProjectId = null;
-    this.sourcesPanel.setProject(null);
+    if (!this.currentProject) return Dialog.alert(t('common.error'), t('messages.noProjectOpen'));
+    if (this.codeEditor.isDirty()) {
+      if (!(await this.confirmDiscard())) return;
+    } else if (!(await Dialog.confirm(t('dialog.closeProject.title'), t('dialog.closeProject.message')))) {
+      return;
+    }
     this.codeEditor.close();
+    ++this.navigationVersion;
     await this.projectManager.closeProject();
-    this.consoleManager.log('Project closed.', 'info');
+    this.currentProject = null;
+    this.flowNavigator.resetProgress();
+    await this.sourcesPanel.setProject(null);
+    this.flow.reset();
+    this.renderProjectState();
+    this.consoleManager.log(t('messages.projectClosed'), 'info');
   }
 
-  async handleRunSynthesis() {
-    if (!this.currentProjectId) {
-      Dialog.alert('Error', 'No project open');
-      return;
+  async handleExit() {
+    if (!(await this.confirmDiscard())) return;
+    if (!(await Dialog.confirm(t('dialog.exit.title'), t('dialog.exit.message')))) return;
+    this.codeEditor.close();
+    if (this.currentProject) {
+      await this.projectManager.closeProject();
+      this.currentProject = null;
+      await this.sourcesPanel.setProject(null);
+      this.flow.reset();
+      this.renderProjectState();
     }
-    
-    this.consoleManager.log('', 'info');
-    this.consoleManager.log('launch_runs -runs synth_1', 'command');
-    this.uiManager.setStatusBar('Running synthesis...');
-    
+    // Browsers only let scripts close windows they opened; the close project above is the fallback
+    window.close();
+  }
+
+  async setTopModule(name) {
+    if (!this.requireProject()) return;
     try {
-      const result = await this.apiClient.post(`/build/${this.currentProjectId}/compile`);
-      
-      if (result.success) {
-        this.consoleManager.log('Synthesis completed successfully', 'success');
-        this.uiManager.setStatusBar('Synthesis complete');
-        
-        if (result.errors && result.errors.length > 0) {
-          // Show errors in editor
-          this.codeEditor.setErrors(result.errors);
-          this.consoleManager.log(`Found ${result.errors.length} errors/warnings`, 'warning');
-        }
-      } else {
-        this.consoleManager.log(`Synthesis failed: ${result.message}`, 'error');
-        this.uiManager.setStatusBar('Synthesis failed');
-        
-        if (result.errors) {
-          this.codeEditor.setErrors(result.errors);
-        }
-      }
+      const updated = await this.apiClient.put(`/api/projects/${encodeURIComponent(this.currentProjectId)}`, { top_module: name });
+      this.currentProject = { ...this.currentProject, top_module: updated.top_module };
+      this.sourcesPanel.setTopModule(updated.top_module);
+      this.consoleManager.log(`set_property top ${name || '(auto)'} [current_fileset]`, 'command');
     } catch (err) {
-      this.consoleManager.log(`ERROR: ${err.message}`, 'error');
-      this.uiManager.setStatusBar('Synthesis error');
+      Dialog.alert(t('common.error'), err.message);
     }
-    
-    setTimeout(() => this.uiManager.setStatusBar('Ready'), 3000);
   }
 
-  async handleRunSimulation() {
-    if (!this.currentProjectId) {
-      Dialog.alert('Error', 'No project open');
-      return;
-    }
-    
-    this.consoleManager.log('', 'info');
-    this.consoleManager.log('launch_simulation -mode behavioral', 'command');
-    this.uiManager.setStatusBar('Running simulation...');
-    
+  // ── Files ───────────────────────────────────────────────────
+
+  async openFile(path) {
+    if (!this.requireProject()) return;
+    if (path === this.codeEditor.filename) return;
+    if (!(await this.confirmDiscard())) return;
+    const projectId = this.currentProjectId;
+    const version = ++this.navigationVersion;
+    const content = this.codeEditor.getContent();
+    const session = this.codeEditor.session;
     try {
-      const result = await this.apiClient.post(`/build/${this.currentProjectId}/simulate`);
-      
-      if (result.success) {
-        this.consoleManager.log('Simulation completed successfully', 'success');
-        this.uiManager.setStatusBar('Simulation complete');
-        
-        // If VCD data is returned, show waveform viewer
-        if (result.vcd) {
-          this.showWaveform(result.vcd);
-        }
-      } else {
-        this.consoleManager.log(`Simulation failed: ${result.message}`, 'error');
-        this.uiManager.setStatusBar('Simulation failed');
-      }
+      const file = await this.apiClient.get(`/api/files/${encodeURIComponent(projectId)}/${path.split('/').map(encodeURIComponent).join('/')}`);
+      if (projectId !== this.currentProjectId || version !== this.navigationVersion) return;
+      if ((this.codeEditor.session !== session || this.codeEditor.getContent() !== content) && !(await this.confirmDiscard())) return;
+      this.codeEditor.openFile(path, file.content);
+      this.consoleManager.log(t('messages.fileOpened', { filename: path }), 'info');
     } catch (err) {
-      this.consoleManager.log(`ERROR: ${err.message}`, 'error');
-      this.uiManager.setStatusBar('Simulation error');
+      Dialog.alert(t('common.error'), t('messages.errorOpenFile', { message: err.message }));
     }
-    
-    setTimeout(() => this.uiManager.setStatusBar('Ready'), 3000);
   }
 
-  showWaveform(vcdData) {
-    // Create waveform viewer if not exists
-    if (!this.waveformViewer) {
-      // Replace console temporarily with waveform viewer
-      const consolePanel = document.getElementById('console');
-      if (consolePanel) {
-        const waveformContainer = document.createElement('div');
-        waveformContainer.id = 'waveform-container';
-        waveformContainer.style.height = '100%';
-        
-        consolePanel.style.display = 'none';
-        consolePanel.parentNode.appendChild(waveformContainer);
-        
-        this.waveformViewer = new WaveformViewer(waveformContainer);
+  // Saves the open file. Returns false if saving failed.
+  async handleSave() {
+    if (!this.requireProject()) return false;
+    if (!this.codeEditor.isOpen()) {
+      this.uiManager.flashStatus(t('status.saved'), t('status.ready'));
+      return true;
+    }
+    const path = this.codeEditor.filename;
+    const projectId = this.currentProjectId;
+    const session = this.codeEditor.session;
+    const content = this.codeEditor.getContent();
+    clearTimeout(this.autoSaveTimer);
+    this.pendingSaves = (this.pendingSaves || 0) + 1;
+    const save = async () => {
+      try {
+        this.uiManager.setStatusBar(t('status.saving'));
+        await this.apiClient.put(`/api/files/${encodeURIComponent(projectId)}/${path.split('/').map(encodeURIComponent).join('/')}`, { content });
+        if (projectId === this.currentProjectId) this.flow.invalidate();
+        if (projectId === this.currentProjectId && session === this.codeEditor.session) this.codeEditor.markSaved(content);
+        this.consoleManager.log(t('messages.fileSaved', { filename: path }), 'success');
+        this.uiManager.flashStatus(t('status.saved'), t('status.ready'));
+        return true;
+      } catch (err) {
+        this.consoleManager.log(t('messages.errorSaveFile', { message: err.message }), 'error');
+        this.uiManager.setStatusBar(t('messages.errorSaveFile', { message: err.message }));
+        Dialog.alert(t('common.error'), t('messages.errorSaveFile', { message: err.message }));
+        return false;
+      } finally {
+        this.pendingSaves--;
+      }
+    };
+    const result = this.saveQueue.then(save, save);
+    this.saveQueue = result;
+    return result;
+  }
+
+  scheduleAutoSave() {
+    clearTimeout(this.autoSaveTimer);
+    if (!loadSettings().autoSave) return;
+    this.autoSaveTimer = setTimeout(() => {
+      if (this.currentProject && this.codeEditor.isDirty()) this.handleSave();
+    }, 750);
+  }
+
+  async handleRefreshSources() {
+    if (!this.requireProject()) return;
+    if (await this.sourcesPanel.refresh() === false) return;
+    this.uiManager.flashStatus(`${this.sourcesPanel.getFiles().length} files`, t('status.ready'));
+  }
+
+  // ── Edit ────────────────────────────────────────────────────
+
+  requireEditor() {
+    if (this.codeEditor.isOpen()) return true;
+    Dialog.alert(t('common.info'), t('editor.noFile'));
+    return false;
+  }
+
+  editCommand(cmd) {
+    if (!this.requireEditor()) return;
+    this.codeEditor.runCommand(cmd);
+  }
+
+  async handlePaste() {
+    if (!this.requireEditor()) return;
+    try {
+      this.codeEditor.insertText(await navigator.clipboard.readText());
+    } catch {
+      // Clipboard read needs permission; fall back to the browser's own paste
+      this.codeEditor.textarea.focus();
+      if (!document.execCommand('paste')) {
+        this.uiManager.flashStatus('Paste: press Ctrl+V / Cmd+V in the editor', t('status.ready'));
       }
     }
-    
-    if (this.waveformViewer) {
-      this.waveformViewer.setData(vcdData);
-    }
   }
 
-  async handleGenerateBitstream() {
-    this.consoleManager.log('INFO: Bitstream generation requires full synthesis+P&R (Phase 4)', 'warning');
-  }
+  handleFind() {
+    if (!this.requireEditor()) return;
+    const form = document.createElement('form');
+    form.innerHTML = `
+      <div class="dialog-form-group"><label for="find-term">${t('editor.findTerm')}</label><input id="find-term" type="text"></div>
+      <div class="dialog-form-group"><label for="find-replace">${t('editor.replaceWith')}</label><input id="find-replace" type="text"></div>
+      <div class="find-status" style="font-size:11px;min-height:14px"></div>`;
+    const term = form.querySelector('#find-term');
+    const status = form.querySelector('.find-status');
+    const selected = this.codeEditor.textarea.value.slice(this.codeEditor.textarea.selectionStart, this.codeEditor.textarea.selectionEnd);
+    if (selected && !selected.includes('\n')) term.value = selected;
 
-  handleSettings() {
-    SettingsDialog.show({
-      autoSave: true,
-      showLineNumbers: true,
-      tabSize: 4
+    const findNext = () => {
+      status.textContent = this.codeEditor.find(term.value) ? '' : t('editor.notFound', { term: term.value });
+      return false;
+    };
+    const dialog = Dialog.show({
+      title: t('menu.find'),
+      body: form,
+      buttons: [
+        { text: t('common.close') },
+        {
+          text: t('editor.replaceAll'),
+          onClick: () => {
+            const n = this.codeEditor.replaceAll(term.value, form.querySelector('#find-replace').value);
+            status.textContent = t('editor.replaced', { count: n });
+            return false;
+          }
+        },
+        { text: t('editor.findNext'), primary: true, onClick: findNext }
+      ]
     });
+    form.onsubmit = (e) => { e.preventDefault(); dialog.querySelector('.dialog-footer .btn-primary').click(); };
   }
 
-  handleAbout() {
-    AboutDialog.show();
+  async handleFindInConsole() {
+    const term = await Dialog.prompt(t('common.search'), 'Find in console:');
+    if (!term) return;
+    const n = this.consoleManager.find(term);
+    this.uiManager.flashStatus(n ? `${n} matching lines` : `"${term}" not found`, t('status.ready'));
+  }
+
+  // ── Window / settings ───────────────────────────────────────
+
+  handleSettings(panel) {
+    SettingsDialog.show({ panel, onSave: s => {
+      this.codeEditor.applySettings(s);
+      this.scheduleAutoSave();
+    } });
+  }
+
+  handleShowSummary() {
+    if (!this.requireProject()) return;
+    const p = this.currentProject;
+    const files = this.sourcesPanel.getFiles();
+    const count = g => files.filter(f => f.group === g).length;
+    Dialog.alert(t('menu.projectSummary'), [
+      `Project:            ${p.name}`,
+      `Location:           ${p.path}`,
+      `Part:               ${p.part}`,
+      `Language:           ${p.language}`,
+      `Top module:         ${p.top_module || '(auto)'}`,
+      `Design sources:     ${count('design')}`,
+      `Constraints:        ${count('constraints')}`,
+      `Simulation sources: ${count('simulation')}`,
+      ...this.flow.summaryLines()
+    ].join('\n'));
   }
 
   handleToggleLanguage() {
-    const current = i18n.getLocale();
-    const next = current === 'en-US' ? 'zh-CN' : 'en-US';
-    i18n.setLocale(next);
-    
-    // Update the language indicator in the menu
-    const langSpan = document.getElementById('currentLang');
-    if (langSpan) {
-      langSpan.textContent = next === 'en-US' ? 'EN' : '中文';
-    }
-    
-    // Refresh page to apply new language
-    this.consoleManager.log(`Language switched to: ${next === 'en-US' ? 'English' : '简体中文'}`, 'info');
-    setTimeout(() => window.location.reload(), 500);
+    i18n.setLocale(i18n.getLocale() === 'en-US' ? 'zh-CN' : 'en-US');
+    this.consoleManager.log(`Language: ${i18n.getLocale() === 'en-US' ? 'English' : '简体中文'}`, 'info');
   }
 
-  handleMinimize() { /* browser limitation */ }
-
-  handleMaximize() {
-    if (document.fullscreenElement) document.exitFullscreen();
-    else document.documentElement.requestFullscreen();
+  updateLanguageIndicator() {
+    const span = document.getElementById('currentLang');
+    if (span) span.textContent = i18n.getLocale() === 'en-US' ? 'EN' : '中文';
   }
 
-  handleClose() {
-    Dialog.confirm('Exit', 'Exit WebVado?').then(confirmed => {
-      if (confirmed) window.close();
-    });
-  }
-
-  async handleOpenFile(data) {
-    const { projectId, filename } = data;
-    
+  async handleMaximize() {
+    document.getElementById('app').classList.remove('minimized');
     try {
-      const response = await this.apiClient.get(`/files/${projectId}/${filename}`);
-      this.codeEditor.openFile(filename, response.content);
-      this.consoleManager.log(`Opened: ${filename}`, 'info');
-    } catch (err) {
-      this.consoleManager.log(`ERROR opening file: ${err.message}`, 'error');
-      Dialog.alert('Error', `Failed to open file: ${err.message}`);
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else await document.documentElement.requestFullscreen();
+    } catch {
+      this.uiManager.flashStatus('Fullscreen not allowed here', t('status.ready'));
     }
-  }
-
-  // Legacy methods for compatibility
-  closeEditor() {
-    if (this.codeEditor) {
-      this.codeEditor.close();
-    }
-  }
-
-  syncLines(ta) {
-    // No longer needed with new CodeEditor
-  }
-
-  openFileFromTree(relPath) {
-    // Handled by SourcesPanel now
   }
 }
 
-// ── Bootstrap ────────────────────────────────────────────────
-
 const app = new WebVadoApp();
+window.webvado = app;
 
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => app.init());
@@ -436,5 +533,4 @@ if (document.readyState === 'loading') {
   app.init();
 }
 
-window.webvado = app;
 export default app;

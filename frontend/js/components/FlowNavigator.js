@@ -4,12 +4,66 @@
  */
 
 import { Icons } from '../ui/icons.js';
+import i18n from '../i18n/index.js';
+
+const UNAVAILABLE = new Set(['ip-catalog', 'create-block', 'open-block', 'open-elab', 'report-drc']);
+
+// labelKey 指向 i18n 里 flowNav 下的键；run 为 true 的项显示绿色运行箭头（不再叠加图标）
+const SECTIONS = [
+  {
+    id: 'project-manager', titleKey: 'projectManager', items: [
+      { id: 'settings', icon: 'settings', labelKey: 'settings', action: 'settings' },
+      { id: 'add-sources', icon: 'add', labelKey: 'addSources', action: 'add-sources' },
+      { id: 'lang-templates', icon: 'verilog', labelKey: 'langTemplates', action: 'lang-templates' },
+      { id: 'ip-catalog', icon: 'compile', labelKey: 'ipCatalog', action: 'ip-catalog' }
+    ]
+  },
+  {
+    id: 'ip-integrator', titleKey: 'ipIntegrator', items: [
+      { id: 'create-block', icon: 'add', labelKey: 'createBlock', action: 'create-block' },
+      { id: 'open-block', icon: 'folderOpen', labelKey: 'openBlock', action: 'open-block' }
+    ]
+  },
+  {
+    id: 'simulation', titleKey: 'simulation', items: [
+      { id: 'sim-settings', icon: 'settings', labelKey: 'simSettings', action: 'sim-settings' },
+      { id: 'run-sim', labelKey: 'runSim', action: 'run-simulation', run: true }
+    ]
+  },
+  {
+    id: 'rtl-analysis', titleKey: 'rtlAnalysis', items: [
+      { id: 'open-elab', icon: 'folderOpen', labelKey: 'openElab', action: 'open-elab' },
+      { id: 'schematic', icon: 'compile', labelKey: 'schematic', action: 'schematic' },
+      { id: 'report-drc', icon: 'verilog', labelKey: 'reportDrc', action: 'report-drc' }
+    ]
+  },
+  {
+    id: 'synthesis', titleKey: 'synthesis', items: [
+      { id: 'run-synth', labelKey: 'runSynth', action: 'run-synthesis', run: true },
+      { id: 'open-synth', icon: 'folderOpen', labelKey: 'openSynth', action: 'open-synth' }
+    ]
+  },
+  {
+    id: 'implementation', titleKey: 'implementation', items: [
+      { id: 'run-impl', labelKey: 'runImpl', action: 'run-implementation', run: true },
+      { id: 'open-impl', icon: 'folderOpen', labelKey: 'openImpl', action: 'open-impl' }
+    ]
+  },
+  {
+    id: 'program-debug', titleKey: 'programDebug', items: [
+      { id: 'gen-bitstream', icon: 'download', labelKey: 'genBitstream', action: 'generate-bitstream' },
+      { id: 'open-hw', icon: 'debug', labelKey: 'openHw', action: 'open-hw' },
+      { id: 'program-device', icon: 'upload', labelKey: 'programDevice', action: 'program-device' }
+    ]
+  }
+];
 
 export class FlowNavigator {
   constructor(eventBus) {
     this.eventBus = eventBus;
     this.container = null;
-    this.sections = this.getSections();
+    this.collapsed = new Set();
+    this.done = new Set();
   }
 
   init() {
@@ -21,88 +75,26 @@ export class FlowNavigator {
 
     this.render();
     this.attachEventListeners();
-    
+    window.addEventListener('locale-changed', () => this.render());
+
     console.log('[FlowNavigator] Initialized');
   }
 
-  getSections() {
-    return [
-      {
-        id: 'project-manager',
-        title: 'PROJECT MANAGER',
-        items: [
-          { id: 'settings', iconSvg: Icons.settings, label: 'Settings', action: 'settings' },
-          { id: 'add-sources', iconSvg: Icons.add, label: 'Add Sources', action: 'add-sources' },
-          { id: 'lang-templates', iconSvg: Icons.verilog, label: 'Language Templates', action: 'lang-templates' },
-          { id: 'ip-catalog', iconSvg: Icons.compile, label: 'IP Catalog', action: 'ip-catalog' }
-        ]
-      },
-      {
-        id: 'ip-integrator',
-        title: 'IP INTEGRATOR',
-        items: [
-          { id: 'create-block', iconSvg: Icons.add, label: 'Create Block Design', action: 'create-block' },
-          { id: 'open-block', iconSvg: Icons.folderOpen, label: 'Open Block Design', action: 'open-block' }
-        ]
-      },
-      {
-        id: 'simulation',
-        title: 'SIMULATION',
-        items: [
-          { id: 'sim-settings', iconSvg: Icons.settings, label: 'Simulation Settings', action: 'sim-settings' },
-          { id: 'run-sim', iconSvg: Icons.play, label: 'Run Simulation', action: 'run-simulation', playable: true }
-        ]
-      },
-      {
-        id: 'rtl-analysis',
-        title: 'RTL ANALYSIS',
-        items: [
-          { id: 'open-elab', iconSvg: Icons.folderOpen, label: 'Open Elaborated Design', action: 'open-elab' },
-          { id: 'schematic', iconSvg: Icons.compile, label: 'Schematic', action: 'schematic' },
-          { id: 'report-drc', iconSvg: Icons.verilog, label: 'Report DRC', action: 'report-drc' }
-        ]
-      },
-      {
-        id: 'synthesis',
-        title: 'SYNTHESIS',
-        items: [
-          { id: 'run-synth', iconSvg: Icons.play, label: 'Run Synthesis', action: 'run-synthesis', playable: true },
-          { id: 'open-synth', iconSvg: Icons.folderOpen, label: 'Open Synthesized Design', action: 'open-synth' }
-        ]
-      },
-      {
-        id: 'implementation',
-        title: 'IMPLEMENTATION',
-        items: [
-          { id: 'run-impl', iconSvg: Icons.play, label: 'Run Implementation', action: 'run-implementation', playable: true },
-          { id: 'open-impl', iconSvg: Icons.folderOpen, label: 'Open Implemented Design', action: 'open-impl' }
-        ]
-      },
-      {
-        id: 'program-debug',
-        title: 'PROGRAM AND DEBUG',
-        items: [
-          { id: 'gen-bitstream', iconSvg: Icons.download, label: 'Generate Bitstream', action: 'generate-bitstream' },
-          { id: 'open-hw', iconSvg: Icons.debug, label: 'Open Hardware Manager', action: 'open-hw' },
-          { id: 'program-device', iconSvg: Icons.upload, label: 'Program Device', action: 'program-device' }
-        ]
-      }
-    ];
-  }
-
   render() {
-    this.container.innerHTML = this.sections.map(section => `
-      <div class="fn-section" data-section="${section.id}">
+    const t = key => i18n.t(`flowNav.${key}`);
+    this.container.innerHTML = SECTIONS.map(section => `
+      <div class="fn-section${this.collapsed.has(section.id) ? ' collapsed' : ''}" data-section="${section.id}">
         <div class="fn-section-title" data-section-id="${section.id}">
           <span class="fn-arrow"></span>
-          <span>${section.title}</span>
+          <span>${t(section.titleKey)}</span>
         </div>
         <div class="fn-items">
           ${section.items.map(item => `
-            <div class="fn-item" data-action="${item.action}" data-item-id="${item.id}">
-              ${item.playable ? '<span class="play">' + Icons.play + '</span>' : ''}
-              <span class="fn-item-icon">${item.iconSvg}</span>
-              <span class="fn-item-label">${item.label}</span>
+            <div class="fn-item${this.done.has(item.id) ? ' done' : ''}" data-action="${item.action}" data-item-id="${item.id}" role="button" tabindex="${UNAVAILABLE.has(item.action) ? '-1' : '0'}" ${UNAVAILABLE.has(item.action) ? `aria-disabled="true" title="${i18n.t('messages.featureUnavailable')}"` : ''}>
+              ${item.run
+                ? `<span class="play">${Icons.play}</span>`
+                : `<span class="fn-item-icon">${Icons[item.icon] || ''}</span>`}
+              <span class="fn-item-label">${t(item.labelKey)}</span>
             </div>
           `).join('')}
         </div>
@@ -111,41 +103,45 @@ export class FlowNavigator {
   }
 
   attachEventListeners() {
-    // Section collapse/expand — only on title clicks
+    // Section titles collapse/expand; items emit their action.
+    // Items are <div>s, so the global button[data-action] listener does not see them.
     this.container.addEventListener('click', (e) => {
-      const sectionTitle = e.target.closest('.fn-section-title');
-      if (sectionTitle) {
-        e.stopPropagation();
-        const section = sectionTitle.closest('.fn-section');
+      const title = e.target.closest('.fn-section-title');
+      if (title) {
+        const section = title.closest('.fn-section');
         section.classList.toggle('collapsed');
-        return; // don't process item click
+        if (section.classList.contains('collapsed')) this.collapsed.add(section.dataset.section);
+        else this.collapsed.delete(section.dataset.section);
+        return;
+      }
+
+      const item = e.target.closest('.fn-item');
+      if (item?.dataset.action && item.getAttribute('aria-disabled') !== 'true') {
+        this.eventBus.emit(`action:${item.dataset.action}`);
       }
     });
 
-    // Item clicks — only on fn-item
-    this.container.addEventListener('click', (e) => {
+    // Keyboard: Enter/Space on a focused item
+    this.container.addEventListener('keydown', (e) => {
       const item = e.target.closest('.fn-item');
-      if (!item) return;
-
-      e.stopPropagation();
-      const action = item.dataset.action;
-      if (action) {
-        this.eventBus.emit(`action:${action}`);
+      if (item && (e.key === 'Enter' || e.key === ' ')) {
+        e.preventDefault();
+        item.click();
       }
     });
   }
 
   markItemComplete(itemId) {
-    const item = this.container.querySelector(`[data-item-id="${itemId}"]`);
-    if (item) {
-      item.classList.add('done');
-    }
+    this.done.add(itemId);
+    this.container?.querySelector(`[data-item-id="${itemId}"]`)?.classList.add('done');
   }
 
   markItemIncomplete(itemId) {
-    const item = this.container.querySelector(`[data-item-id="${itemId}"]`);
-    if (item) {
-      item.classList.remove('done');
-    }
+    this.done.delete(itemId);
+    this.container?.querySelector(`[data-item-id="${itemId}"]`)?.classList.remove('done');
+  }
+
+  resetProgress() {
+    [...this.done].forEach(id => this.markItemIncomplete(id));
   }
 }

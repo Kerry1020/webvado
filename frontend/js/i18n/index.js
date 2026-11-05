@@ -12,8 +12,9 @@ class I18n {
       'zh-CN': zh_CN
     };
     
-    // 从 localStorage 读取，默认英文
-    this.currentLocale = localStorage.getItem('webvado-locale') || 'en-US';
+    // 从 localStorage 读取，默认英文；存了不认识的值就回退英文
+    const saved = localStorage.getItem('webvado-locale');
+    this.currentLocale = this.locales[saved] ? saved : 'en-US';
   }
 
   /**
@@ -61,6 +62,23 @@ class I18n {
     window.dispatchEvent(new CustomEvent('locale-changed', { detail: { locale } }));
     
     return true;
+  }
+
+  /**
+   * 翻译页面上所有带 data-i18n / data-i18n-placeholder / data-i18n-title 的元素
+   */
+  apply(root = document) {
+    root.querySelectorAll('[data-i18n]').forEach(el => {
+      el.textContent = this.t(el.dataset.i18n);
+    });
+    root.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+      el.placeholder = this.t(el.dataset.i18nPlaceholder);
+    });
+    root.querySelectorAll('[data-i18n-title]').forEach(el => {
+      el.title = this.t(el.dataset.i18nTitle);
+      el.setAttribute('aria-label', el.title);
+    });
+    document.documentElement.lang = this.currentLocale;
   }
 
   /**

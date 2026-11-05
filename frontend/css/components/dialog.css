@@ -14,6 +14,13 @@
   animation: dialogFadeIn 0.2s ease-out;
 }
 
+/* A closing dialog must not swallow clicks during its fade-out */
+.dialog-overlay.dialog-closing {
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
 .dialog {
   background: white;
   border: 1px solid #a0a0a0;
@@ -134,6 +141,13 @@
   outline: none;
   border-color: #1888e8;
   box-shadow: 0 0 0 2px rgba(24, 136, 232, 0.2);
+}
+
+.settings-group small {
+  display: block;
+  color: #666;
+  font-size: 11px;
+  margin-top: 2px;
 }
 
 /* Settings Dialog */

@@ -40,27 +40,10 @@ export class ProjectManager {
   }
 
   async openProject(idOrName) {
-    try {
-      const project = await this.apiClient.get(`/api/projects/${idOrName}`);
-      
-      this.currentProject = project;
-      this.eventBus.emit('project:opened', project);
-      
-      // Update UI
-      const titleBar = document.getElementById('titleBarText');
-      if (titleBar) titleBar.textContent = `WebVado - ${project.name} [${project.path}]`;
-      
-      const statusProject = document.getElementById('statusBarProject');
-      if (statusProject) statusProject.textContent = `Project: ${project.name}`;
-      
-      const statusPart = document.getElementById('statusBarPart');
-      if (statusPart) statusPart.textContent = `Part: ${project.part}`;
-      
-      return project;
-    } catch (error) {
-      console.error('[ProjectManager] Failed to open project:', error);
-      throw error;
-    }
+    const project = await this.apiClient.get(`/api/projects/${encodeURIComponent(idOrName)}`);
+    this.currentProject = project;
+    this.eventBus.emit('project:opened', project);
+    return project;
   }
 
   async saveProject() {
@@ -93,28 +76,8 @@ export class ProjectManager {
 
   async closeProject() {
     if (!this.currentProject) return;
-
-    try {
-      const projectName = this.currentProject.name;
-      
-      this.currentProject = null;
-      this.eventBus.emit('project:closed');
-      
-      // Update UI
-      const titleBar = document.getElementById('titleBarText');
-      if (titleBar) titleBar.textContent = 'WebVado - No Project Open';
-      
-      const statusProject = document.getElementById('statusBarProject');
-      if (statusProject) statusProject.textContent = 'No Project Open';
-      
-      const statusPart = document.getElementById('statusBarPart');
-      if (statusPart) statusPart.textContent = '-';
-      
-      console.log(`[ProjectManager] Project "${projectName}" closed`);
-    } catch (error) {
-      console.error('[ProjectManager] Failed to close project:', error);
-      throw error;
-    }
+    this.currentProject = null;
+    this.eventBus.emit('project:closed');
   }
 
   async deleteProject(idOrName) {

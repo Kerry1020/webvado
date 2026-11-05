@@ -1,6 +1,17 @@
 /**
- * ConsoleManager - Manages console output and command input
+ * ConsoleManager - Console output, filter tabs and Tcl-style command input
  */
+import i18n from '../i18n/index.js';
+
+// Tabs filter the same log: Tcl Console shows everything, Messages shows
+// warnings and errors, Logs shows tool output, Reports shows build summaries.
+const TAB_FILTER = {
+  'tcl-console': () => true,
+  messages: type => type === 'warning' || type === 'error',
+  logs: (type, channel) => channel === 'log',
+  reports: (type, channel) => channel === 'report'
+};
+
 export class ConsoleManager {
   constructor(eventBus) {
     this.eventBus = eventBus;
@@ -8,9 +19,11 @@ export class ConsoleManager {
     this.consoleInput = null;
     this.commandHistory = [];
     this.historyIndex = -1;
+    this.activeTab = 'tcl-console';
+    this.commands = new Map();
   }
 
-  async init() {
+  init() {
     this.consoleBody = document.getElementById('consoleBody');
     this.consoleInput = document.getElementById('consoleInput');
 
@@ -19,7 +32,6 @@ export class ConsoleManager {
       return;
     }
 
-    // Set up command input
     this.consoleInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
         this.handleCommand(this.consoleInput.value);
@@ -33,50 +45,75 @@ export class ConsoleManager {
       }
     });
 
-    // Set up console toolbar buttons
-    document.querySelector('[data-action="clear-console"]')?.addEventListener('click', () => {
-      this.clear();
-    });
+    for (const tab of Object.keys(TAB_FILTER)) {
+      this.eventBus.on(`tab:${tab}`, () => this.setTab(tab));
+    }
 
-    document.querySelector('[data-action="scroll-bottom"]')?.addEventListener('click', () => {
-      this.scrollToBottom();
-    });
+    // Components report through the bus instead of holding a console reference
+    this.eventBus.on('console:log', msg => this.log(msg, 'info'));
+    this.eventBus.on('console:error', msg => this.log(msg, 'error'));
 
     console.log('[ConsoleManager] Initialized');
   }
 
-  log(message, type = 'info') {
+  /**
+   * @param {string} message
+   * @param {'info'|'success'|'warning'|'error'|'command'} type
+   * @param {'tcl'|'log'|'report'} channel
+   */
+  log(message, type = 'info', channel = 'tcl') {
     if (!this.consoleBody) return;
 
     const line = document.createElement('div');
     line.className = `cl ${this.getTypeClass(type)}`;
+    line.dataset.type = type;
+    line.dataset.channel = channel;
     line.textContent = message;
+    if (!TAB_FILTER[this.activeTab](type, channel)) line.classList.add('hidden-by-filter');
 
     this.consoleBody.appendChild(line);
     this.scrollToBottom();
   }
 
   getTypeClass(type) {
-    const classMap = {
-      'info': 'i',
-      'success': 's',
-      'warning': 'w',
-      'error': 'e',
-      'command': 'c'
-    };
-    return classMap[type] || 'i';
+    return { info: 'i', success: 's', warning: 'w', error: 'e', command: 'c' }[type] || 'i';
+  }
+
+  setTab(tab) {
+    if (!TAB_FILTER[tab]) return;
+    this.activeTab = tab;
+    this.consoleBody.dataset.filter = tab;
+    const show = TAB_FILTER[tab];
+    this.consoleBody.querySelectorAll('.cl').forEach(line => {
+      line.classList.toggle('hidden-by-filter', !show(line.dataset.type, line.dataset.channel));
+    });
+    this.scrollToBottom();
   }
 
   clear() {
-    if (this.consoleBody) {
-      this.consoleBody.innerHTML = '';
-    }
+    if (this.consoleBody) this.consoleBody.innerHTML = '';
   }
 
   scrollToBottom() {
-    if (this.consoleBody) {
-      this.consoleBody.scrollTop = this.consoleBody.scrollHeight;
-    }
+    if (this.consoleBody) this.consoleBody.scrollTop = this.consoleBody.scrollHeight;
+  }
+
+  // Selects the first line containing the term and scrolls to it
+  find(term) {
+    const lines = [...this.consoleBody.querySelectorAll('.cl:not(.hidden-by-filter)')];
+    this.consoleBody.querySelectorAll('.cl.found').forEach(l => l.classList.remove('found'));
+    const matches = lines.filter(l => l.textContent.toLowerCase().includes(term.toLowerCase()));
+    if (!matches.length) return 0;
+    matches.forEach(l => l.classList.add('found'));
+    matches[0].scrollIntoView({ block: 'center' });
+    return matches.length;
+  }
+
+  /**
+   * Register a console command. handler(args) may return a promise.
+   */
+  register(name, description, handler) {
+    this.commands.set(name, { description, handler });
   }
 
   handleCommand(command) {
@@ -84,56 +121,32 @@ export class ConsoleManager {
 
     this.commandHistory.push(command);
     this.historyIndex = this.commandHistory.length;
-
     this.log(`WebVado% ${command}`, 'command');
-
-    // Parse and execute command
     this.executeCommand(command);
   }
 
-  executeCommand(command) {
-    const parts = command.trim().split(/\s+/);
-    const cmd = parts[0].toLowerCase();
+  async executeCommand(command) {
+    const [cmd, ...args] = command.trim().split(/\s+/);
+    const name = cmd.toLowerCase();
 
-    switch (cmd) {
-      case 'help':
-        this.log('可用命令:', 'info');
-        this.log('  help           - 显示帮助信息', 'info');
-        this.log('  clear          - 清空控制台', 'info');
-        this.log('  pwd            - 显示当前目录', 'info');
-        this.log('  ls             - 列出文件', 'info');
-        this.log('  version        - 显示版本信息', 'info');
-        break;
+    if (name === 'help') {
+      this.log(i18n.t('console.helpPrompt'), 'info');
+      for (const [key, { description }] of this.commands) {
+        this.log(`  ${key.padEnd(18)}${description}`, 'info');
+      }
+      return;
+    }
 
-      case 'clear':
-        this.clear();
-        break;
+    const entry = this.commands.get(name);
+    if (!entry) {
+      this.log(i18n.t('console.unknownCommand', { cmd }), 'warning');
+      return;
+    }
 
-      case 'pwd':
-        this.log(window.location.pathname, 'info');
-        break;
-
-      case 'ls':
-        this.log('未打开工程', 'warning');
-        break;
-
-      case 'version':
-        this.log('WebVado 0.1.0 (Alpha)', 'info');
-        this.log('Copyright 2026 WebVado Contributors', 'info');
-        break;
-
-      case 'synth':
-      case 'synthesize':
-        this.eventBus.emit('action:run-synthesis');
-        break;
-
-      case 'sim':
-      case 'simulate':
-        this.eventBus.emit('action:run-simulation');
-        break;
-
-      default:
-        this.log(`未知命令: ${cmd}。输入 "help" 查看可用命令。`, 'warning');
+    try {
+      await entry.handler(args);
+    } catch (err) {
+      this.log(`ERROR: ${err.message}`, 'error');
     }
   }
 

@@ -130,33 +130,36 @@ export class WaveformViewer {
   
   updateCanvasSize() {
     const rect = this.container.querySelector('.waveform-container').getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
     const dpr = window.devicePixelRatio || 1;
+    const height = Math.max(rect.height, (this.data?.signals?.length || 0) * this.signalHeight);
     
-    // Names canvas
+    // Names canvas. setTransform (not scale) so repeated resizes don't compound.
     this.namesCanvas.width = this.nameColumnWidth * dpr;
-    this.namesCanvas.height = rect.height * dpr;
+    this.namesCanvas.height = height * dpr;
     this.namesCanvas.style.width = `${this.nameColumnWidth}px`;
-    this.namesCanvas.style.height = `${rect.height}px`;
-    this.namesCtx.scale(dpr, dpr);
+    this.namesCanvas.style.height = `${height}px`;
+    this.namesCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
     
     // Waveform canvas
-    const waveformWidth = rect.width - this.nameColumnWidth;
+    const waveformWidth = Math.max(0, rect.width - this.nameColumnWidth);
     this.canvas.width = waveformWidth * dpr;
-    this.canvas.height = rect.height * dpr;
+    this.canvas.height = height * dpr;
     this.canvas.style.width = `${waveformWidth}px`;
-    this.canvas.style.height = `${rect.height}px`;
-    this.ctx.scale(dpr, dpr);
+    this.canvas.style.height = `${height}px`;
+    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
   
   setData(vcdData) {
     this.data = vcdData;
     this.offsetX = 0;
+    this.updateCanvasSize();
     
     if (this.data && this.data.signals && this.data.signals.length > 0) {
       this.zoomFit();
       
       const info = this.container.querySelector('.waveform-info');
-      info.textContent = `${this.data.signals.length} signals | Timescale: ${this.data.timescale || '1ns'}`;
+      info.textContent = `${this.data.signals.length} signals | ${this.data.endtime ?? ''} ${this.data.timescale || '1ns'}`;
     }
     
     this.render();
@@ -370,11 +373,15 @@ export class WaveformViewer {
   }
   
   formatBusValue(value, width) {
-    if (!value || value === 'x' || value === 'z') return value;
+    if (!value || /[xz]/i.test(value)) return value;
     
-    // Convert binary to hex
-    const hex = parseInt(value, 2).toString(16).toUpperCase();
-    return `0x${hex.padStart(Math.ceil(width / 4), '0')}`;
+    // Binary to hex; BigInt keeps buses wider than 53 bits exact
+    try {
+      const hex = BigInt(`0b${value}`).toString(16).toUpperCase();
+      return `0x${hex.padStart(Math.ceil(width / 4), '0')}`;
+    } catch {
+      return value;
+    }
   }
   
   zoomIn() {
@@ -400,7 +407,7 @@ export class WaveformViewer {
     });
     
     const width = this.canvas.width / (window.devicePixelRatio || 1);
-    this.scale = (width - 40) / maxTime;
+    this.scale = maxTime > 0 ? (width - 40) / maxTime : 1;
     this.offsetX = 20;
     this.render();
   }

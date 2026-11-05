@@ -1,0 +1,17 @@
+.netlist-dialog { width: min(1100px, 94vw); max-width: 94vw; }
+.netlist-toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.netlist-toolbar select { max-width: 40%; }
+.netlist-svg { width: 100%; height: 48vh; background: #f5f7fa; border: 1px solid #c5ced8; touch-action: none; cursor: grab; }
+.netlist-svg:active { cursor: grabbing; }
+.netlist-node rect { fill: #fff; stroke: #37688c; stroke-width: 1.5; }
+.netlist-port rect { fill: #eaf2f8; }
+.netlist-node { cursor: pointer; }
+.netlist-node text, .netlist-wires text { font: 11px Consolas, monospace; fill: #263747; }
+.netlist-node-name { font-weight: bold !important; }
+.netlist-node circle { fill: #37688c; }
+.netlist-wire { fill: none; stroke: #8da8bc; stroke-width: 1; }
+.netlist-wire.selected { stroke: #cc6d00; stroke-width: 2.5; }
+.netlist-node.selected rect, .netlist-node:focus rect { stroke: #cc6d00; stroke-width: 3; }
+.netlist-details { max-height: 16vh; overflow: auto; white-space: pre-wrap; font-size: 11px; margin: 8px 0 0; }
+.build-report-table { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
+.build-report-table th, .build-report-table td { padding: 4px 8px; text-align: left; border-bottom: 1px solid #ddd; }

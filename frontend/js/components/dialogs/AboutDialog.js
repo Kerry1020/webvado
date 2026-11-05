@@ -8,18 +8,9 @@ import i18n from '../../i18n/index.js';
 import { Icons } from '../../ui/icons.js';
 
 export class AboutDialog {
-  static async show() {
+  static show() {
     const t = i18n.t.bind(i18n);
     const apiClient = new APIClient();
-    
-    // 获取工具链状态
-    let tools = {};
-    try {
-      const response = await apiClient.get('/api/tools');
-      tools = response.tools || response;
-    } catch (err) {
-      console.error('Failed to fetch tools:', err);
-    }
 
     const content = document.createElement('div');
     content.className = 'about-content';
@@ -33,7 +24,7 @@ export class AboutDialog {
       
       <div class="about-tools">
         <h4>${t('dialog.about.toolchainStatus')}:</h4>
-        ${this.renderToolStatus(tools, t)}
+        <div class="about-tools-list">${t('common.loading')}</div>
       </div>
       
       <div class="about-footer">
@@ -42,17 +33,20 @@ export class AboutDialog {
       </div>
     `;
 
+    // Open immediately; tool detection can take a few seconds
     Dialog.show({
       title: t('dialog.about.title'),
       body: content,
-      buttons: [
-        {
-          text: t('common.ok'),
-          primary: true,
-          onClick: () => {}
-        }
-      ]
+      buttons: [{ text: t('common.ok'), primary: true }]
     });
+
+    apiClient.get('/api/tools')
+      .then(response => {
+        content.querySelector('.about-tools-list').innerHTML = this.renderToolStatus(response.tools || {}, t);
+      })
+      .catch(err => {
+        content.querySelector('.about-tools-list').textContent = `${t('common.error')}: ${err.message}`;
+      });
   }
 
   static renderToolStatus(tools, t) {

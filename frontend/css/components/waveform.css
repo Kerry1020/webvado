@@ -52,18 +52,23 @@
 
 .waveform-container {
   flex: 1;
+  min-height: 0;
   display: flex;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
   position: relative;
+  align-items: flex-start;
 }
 
 .waveform-names-canvas {
   border-right: 1px solid var(--border-color);
   cursor: default;
+  flex-shrink: 0;
 }
 
 .waveform-canvas {
   flex: 1;
+  min-width: 0;
   cursor: grab;
 }
 

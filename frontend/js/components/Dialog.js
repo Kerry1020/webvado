@@ -1,3 +1,5 @@
+import i18n from '../i18n/index.js';
+
 /**
  * Dialog.js - Modal dialog system
  * Provides modal dialogs with overlay, Vivado-style title bar, and button controls
@@ -13,12 +15,17 @@ export class Dialog {
    * @param {Function} options.onClose - Callback when dialog closes
    * @returns {HTMLElement} The dialog element
    */
-  static show({ title, body, buttons = [], onClose }) {
+  static show({ title, body, buttons = [], onClose, customClass }) {
     const overlay = document.createElement('div');
     overlay.className = 'dialog-overlay';
     
     const dialog = document.createElement('div');
     dialog.className = 'dialog';
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    dialog.setAttribute('aria-label', title);
+    const previousFocus = document.activeElement;
+    let pending = false;
     
     // Title bar
     const titleBar = document.createElement('div');
@@ -32,7 +39,7 @@ export class Dialog {
     closeBtn.type = 'button';
     closeBtn.className = 'dialog-close';
     closeBtn.innerHTML = '×';
-    closeBtn.setAttribute('aria-label', 'Close dialog');
+    closeBtn.setAttribute('aria-label', i18n.t('common.close'));
     
     titleBar.appendChild(titleText);
     titleBar.appendChild(closeBtn);
@@ -56,15 +63,31 @@ export class Dialog {
       btn.type = 'button'; // prevent form submission
       btn.className = btnConfig.primary ? 'btn btn-primary' : 'btn';
       btn.textContent = btnConfig.text;
-      btn.onclick = (e) => {
+      btn.onclick = async (e) => {
         e.preventDefault();
         e.stopPropagation();
-        if (btnConfig.onClick) {
-          const result = btnConfig.onClick();
-          // if onClick returns false explicitly, don't close
-          if (result === false) return;
+        if (pending) return;
+        pending = true;
+        dialog.setAttribute('aria-busy', 'true');
+        [...footer.querySelectorAll('button'), closeBtn].forEach(b => { b.disabled = true; });
+        try {
+          if (btnConfig.onClick && await btnConfig.onClick() === false) return;
+          pending = false;
+          finish();
+        } catch (error) {
+          let message = bodyEl.querySelector('.dialog-action-error');
+          if (!message) {
+            message = document.createElement('p');
+            message.className = 'dialog-action-error';
+            message.setAttribute('role', 'alert');
+            bodyEl.appendChild(message);
+          }
+          message.textContent = error.message;
+        } finally {
+          pending = false;
+          dialog.removeAttribute('aria-busy');
+          [...footer.querySelectorAll('button'), closeBtn].forEach(b => { b.disabled = false; });
         }
-        Dialog.close(overlay);
       };
       footer.appendChild(btn);
     });
@@ -74,37 +97,56 @@ export class Dialog {
     if (buttons.length > 0) {
       dialog.appendChild(footer);
     }
+    if (customClass) dialog.classList.add(customClass);
     
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
     
-    // Close handlers
-    const handleClose = () => {
+    // Every way of closing runs onClose exactly once
+    let closed = false;
+    const finish = () => {
+      if (closed || pending) return;
+      closed = true;
+      document.removeEventListener('keydown', handleEsc);
       Dialog.close(overlay);
       if (onClose) onClose();
+      if (previousFocus?.isConnected) previousFocus.focus();
     };
     
-    closeBtn.onclick = handleClose;
+    closeBtn.onclick = finish;
     
     overlay.onclick = (e) => {
-      if (e.target === overlay) {
-        handleClose();
-      }
+      if (e.target === overlay) finish();
     };
     
-    // ESC key handler
+    // ESC closes only the topmost dialog
     const handleEsc = (e) => {
-      if (e.key === 'Escape') {
-        handleClose();
-        document.removeEventListener('keydown', handleEsc);
+      if (overlay !== [...document.querySelectorAll('.dialog-overlay:not(.dialog-closing)')].pop()) return;
+      if (e.key === 'Tab') {
+        const focusable = [...dialog.querySelectorAll('button, input, select, textarea, a[href], [tabindex="0"]')]
+          .filter(el => !el.disabled && el.getClientRects().length);
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (e.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) {
+          e.preventDefault(); last?.focus();
+        } else if (!e.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) {
+          e.preventDefault(); first?.focus();
+        }
+      }
+      if (e.key === 'Escape' && overlay === [...document.querySelectorAll('.dialog-overlay')].pop()) {
+        e.preventDefault();
+        finish();
       }
     };
     document.addEventListener('keydown', handleEsc);
     
-    // Focus the first button or close button
+    // Focus the first input, else the primary button, else close
     setTimeout(() => {
-      const firstBtn = footer.querySelector('button') || closeBtn;
-      firstBtn.focus();
+      if (closed) return;
+      const target = bodyEl.querySelector('input, select, textarea') ||
+        footer.querySelector('.btn-primary') || footer.querySelector('button') || closeBtn;
+      target.focus();
+      if (target.select) target.select();
     }, 0);
     
     return dialog;
@@ -123,82 +165,76 @@ export class Dialog {
     }
   }
   
+  static escape(text) {
+    return String(text ?? '').replace(/[&<>"']/g, c => (
+      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+    ));
+  }
+  
   /**
    * Show a confirmation dialog
-   * @param {string} title
-   * @param {string} message
-   * @returns {Promise<boolean>} Resolves to true if confirmed, false if canceled
+   * @returns {Promise<boolean>} true if confirmed, false otherwise
    */
-  static confirm(title, message) {
+  static confirm(title, message, { okText = i18n.t('common.ok'), cancelText = i18n.t('common.cancel') } = {}) {
     return new Promise((resolve) => {
+      let result = false;
       Dialog.show({
         title,
-        body: `<p>${message}</p>`,
+        body: `<p>${Dialog.escape(message)}</p>`,
         buttons: [
-          { text: 'Cancel', onClick: () => resolve(false) },
-          { text: 'OK', primary: true, onClick: () => resolve(true) }
+          { text: cancelText },
+          { text: okText, primary: true, onClick: () => { result = true; } }
         ],
-        onClose: () => resolve(false)
+        onClose: () => resolve(result)
       });
     });
   }
   
   /**
    * Show a prompt dialog
-   * @param {string} title
-   * @param {string} message
-   * @param {string} defaultValue
-   * @returns {Promise<string|null>} Resolves to input value or null if canceled
+   * @returns {Promise<string|null>} input value, or null if canceled
    */
   static prompt(title, message, defaultValue = '') {
     return new Promise((resolve) => {
       const form = document.createElement('form');
       form.innerHTML = `
-        <p>${message}</p>
-        <input type="text" class="dialog-input" value="${defaultValue}" autofocus>
+        <div class="dialog-form-group">
+          <label>${Dialog.escape(message)}</label>
+          <input type="text" class="dialog-input">
+        </div>
       `;
-      
       const input = form.querySelector('input');
+      input.value = defaultValue;
       
-      const dialog = Dialog.show({
+      let result = null;
+      Dialog.show({
         title,
         body: form,
         buttons: [
-          { text: 'Cancel', onClick: () => resolve(null) },
-          { text: 'OK', primary: true, onClick: () => resolve(input.value) }
+          { text: i18n.t('common.cancel') },
+          { text: i18n.t('common.ok'), primary: true, onClick: () => { result = input.value; } }
         ],
-        onClose: () => resolve(null)
+        onClose: () => resolve(result)
       });
       
-      // Submit on Enter
+      // Enter submits through the OK button
       form.onsubmit = (e) => {
         e.preventDefault();
-        resolve(input.value);
-        Dialog.close(dialog.parentElement);
+        form.closest('.dialog')?.querySelector('.dialog-footer .btn-primary')?.click();
       };
-      
-      // Focus input after dialog appears
-      setTimeout(() => {
-        input.focus();
-        input.select();
-      }, 0);
     });
   }
   
   /**
-   * Show an alert dialog
-   * @param {string} title
-   * @param {string} message
+   * Show an alert dialog. The message is plain text; line breaks are kept.
    * @returns {Promise<void>}
    */
   static alert(title, message) {
     return new Promise((resolve) => {
       Dialog.show({
         title,
-        body: `<p>${message}</p>`,
-        buttons: [
-          { text: 'OK', primary: true, onClick: () => resolve() }
-        ],
+        body: `<div class="dialog-pre">${Dialog.escape(message)}</div>`,
+        buttons: [{ text: i18n.t('common.ok'), primary: true }],
         onClose: () => resolve()
       });
     });

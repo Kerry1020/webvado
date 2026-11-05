@@ -34,35 +34,36 @@ export class NewProjectDialog {
         <label for="project-language">${t('dialog.newProject.language')}</label>
         <select id="project-language" name="language" required>
           <option value="verilog" selected>${t('dialog.newProject.languageVerilog')}</option>
-          <option value="vhdl">${t('dialog.newProject.languageVHDL')}</option>
         </select>
       </div>
     `;
 
-    let submitted = false;
-    
-    Dialog.show({
+    const nameInput = form.querySelector('#project-name');
+    nameInput.addEventListener('input', () => nameInput.setCustomValidity(''));
+
+    const dialog = Dialog.show({
       title: t('dialog.newProject.title'),
       body: form,
       buttons: [
-        { 
-          text: t('common.cancel'),
-          onClick: () => {}
-        },
+        { text: t('common.cancel') },
         { 
           text: t('common.create'),
           primary: true,
-          onClick: () => {
-            if (form.checkValidity()) {
-              submitted = true;
-              const data = {
-                name: form.querySelector('#project-name').value.trim(),
-                part: form.querySelector('#project-part').value,
-                language: form.querySelector('#project-language').value
-              };
-              onCreate(data);
-            } else {
+          onClick: async () => {
+            if (!form.checkValidity()) {
               form.reportValidity();
+              return false;
+            }
+            const data = {
+              name: nameInput.value.trim(),
+              part: form.querySelector('#project-part').value,
+              language: form.querySelector('#project-language').value
+            };
+            // Keep the dialog open (with the error shown) if creation fails
+            const error = await onCreate(data);
+            if (error) {
+              nameInput.setCustomValidity(error);
+              nameInput.reportValidity();
               return false;
             }
           }
@@ -70,11 +71,10 @@ export class NewProjectDialog {
       ]
     });
 
-    // 回车提交
+    // Enter submits this dialog only
     form.addEventListener('submit', (e) => {
       e.preventDefault();
-      const createBtn = document.querySelector('.dialog-footer .btn-primary');
-      if (createBtn) createBtn.click();
+      dialog.querySelector('.dialog-footer .btn-primary')?.click();
     });
   }
 }

@@ -28,15 +28,22 @@ export class APIClient {
       const response = await fetch(url, config);
       
       if (!response.ok) {
-        const error = await response.json().catch(() => ({ 
+        const body = await response.json().catch(() => ({ 
           message: response.statusText 
         }));
-        throw new Error(error.message || `HTTP ${response.status}`);
+        // Backend returns { error: { code, message } }, { error: 'string' } or { message, diagnostics }
+        const msg = body?.error?.message || (typeof body?.error === 'string' ? body.error : null) ||
+          body?.message || `HTTP ${response.status}`;
+        const err = new Error(msg);
+        err.status = response.status;
+        err.code = body?.error?.code || null;
+        err.details = body;
+        throw err;
       }
 
       return await response.json();
     } catch (error) {
-      console.error(`[API] ${method} ${path} failed:`, error);
+      console.warn(`[API] ${method} ${path} failed:`, error.message);
       throw error;
     }
   }

@@ -1,201 +1,128 @@
 /**
- * UIManager - Handles UI initialization and event delegation
+ * UIManager - Window chrome: menus, toolbar, title bar, tabs, panel toggles.
+ *
+ * One delegated click listener on document turns every element with
+ * data-action into an `action:<name>` event, exactly once per click.
+ * Components whose items are not buttons (Flow Navigator rows, tree rows)
+ * handle their own clicks.
  */
 export class UIManager {
   constructor(eventBus) {
     this.eventBus = eventBus;
-    this.openMenus = new Set();
   }
 
-  async init() {
-    console.log('[UIManager] Initializing...');
-    
-    // Set up event delegation
-    this.setupMenus();
-    this.setupToolbar();
+  init() {
+    this.setupClicks();
     this.setupTitleBar();
     this.setupPanelToggles();
-    
-    // Initialize clock
+
     this.updateClock();
     setInterval(() => this.updateClock(), 1000);
-    
+
     console.log('[UIManager] Initialized');
   }
 
-  setupMenus() {
-    const menuBar = document.getElementById('menuBar');
-    if (!menuBar) return;
-
-    // Close all menus when clicking outside
+  setupClicks() {
     document.addEventListener('click', (e) => {
-      if (!e.target.closest('.menu')) {
+      // Menu title: open/close its dropdown
+      const menuTitle = e.target.closest('.menu');
+      const dropdownItem = e.target.closest('.dropdown-item');
+      if (menuTitle && !dropdownItem) {
+        const wasOpen = menuTitle.classList.contains('open');
         this.closeAllMenus();
+        if (!wasOpen) menuTitle.classList.add('open');
+        return;
       }
-    });
 
-    // Handle menu clicks
-    menuBar.addEventListener('click', (e) => {
-      const menu = e.target.closest('.menu');
-      if (!menu) return;
+      // Anything outside an open menu closes it
+      this.closeAllMenus();
 
-      const menuId = menu.dataset.menu;
-      this.toggleMenu(menuId, menu);
-    });
+      // Tabs (Sources / Netlist / Compile Order, console tabs)
+      const tab = e.target.closest('[data-tab]');
+      if (tab && !tab.disabled) {
+        const bar = tab.parentElement;
+        bar.querySelectorAll('[data-tab]').forEach(t => t.classList.toggle('active', t === tab));
+        this.eventBus.emit(`tab:${tab.dataset.tab}`, tab.dataset.tab);
+        return;
+      }
 
-    // Handle dropdown item clicks
-    menuBar.addEventListener('click', (e) => {
-      const item = e.target.closest('.dropdown-item');
-      if (!item) return;
-
+      // Buttons and links that carry an action
+      const el = e.target.closest('button[data-action], a[data-action]');
+      if (!el || el.disabled) return;
       e.preventDefault();
-      e.stopPropagation();
+      this.eventBus.emit(`action:${el.dataset.action}`);
+    });
 
-      const action = item.dataset.action;
-      if (action) {
-        this.eventBus.emit(`action:${action}`);
-        this.closeAllMenus();
+    // Hovering across the menu bar while a menu is open switches menus, like a desktop app
+    document.getElementById('menuBar')?.addEventListener('mouseover', (e) => {
+      const menu = e.target.closest('.menu');
+      const open = document.querySelector('.menu.open');
+      if (menu && open && menu !== open) {
+        open.classList.remove('open');
+        menu.classList.add('open');
       }
     });
-  }
 
-  toggleMenu(menuId, menuElement) {
-    const isOpen = this.openMenus.has(menuId);
-
-    // Close all menus first
-    this.closeAllMenus();
-
-    // Open this menu if it wasn't open
-    if (!isOpen) {
-      menuElement.classList.add('open');
-      this.openMenus.add(menuId);
-    }
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') this.closeAllMenus();
+    });
   }
 
   closeAllMenus() {
-    document.querySelectorAll('.menu.open').forEach(menu => {
-      menu.classList.remove('open');
-    });
-    this.openMenus.clear();
-  }
-
-  setupToolbar() {
-    const toolbar = document.getElementById('toolbar');
-    if (toolbar) {
-      toolbar.addEventListener('click', (e) => {
-        const btn = e.target.closest('.toolbar-btn');
-        if (!btn || btn.disabled) return;
-
-        const action = btn.dataset.action;
-        if (action) {
-          this.eventBus.emit(`action:${action}`);
-        }
-      });
-    }
-    
-    // Also listen to welcome screen buttons and any other buttons with data-action
-    document.addEventListener('click', (e) => {
-      const btn = e.target.closest('button[data-action], a[data-action]');
-      if (!btn || btn.disabled) return;
-      
-      // Skip if already handled by toolbar or menu
-      if (btn.closest('#toolbar') || btn.closest('#menuBar')) return;
-      
-      e.preventDefault();
-      const action = btn.dataset.action;
-      if (action) {
-        this.eventBus.emit(`action:${action}`);
-      }
-    });
+    document.querySelectorAll('.menu.open').forEach(menu => menu.classList.remove('open'));
   }
 
   setupTitleBar() {
-    const minimizeBtn = document.getElementById('minimizeBtn');
-    const maximizeBtn = document.getElementById('maximizeBtn');
-    const closeBtn = document.getElementById('closeBtn');
+    const bind = (id, action) => {
+      document.getElementById(id)?.addEventListener('click', () => this.eventBus.emit(`action:${action}`));
+    };
+    bind('minimizeBtn', 'minimize');
+    bind('maximizeBtn', 'maximize');
+    bind('closeBtn', 'close');
 
-    if (minimizeBtn) {
-      minimizeBtn.addEventListener('click', () => {
-        this.eventBus.emit('action:minimize');
-      });
-    }
-
-    if (maximizeBtn) {
-      maximizeBtn.addEventListener('click', () => {
-        this.eventBus.emit('action:maximize');
-      });
-    }
-
-    if (closeBtn) {
-      closeBtn.addEventListener('click', () => {
-        this.eventBus.emit('action:close');
-      });
-    }
+    // Double-clicking the title bar toggles maximize, like a desktop window
+    document.getElementById('titleBar')?.addEventListener('dblclick', (e) => {
+      if (!e.target.closest('button')) this.eventBus.emit('action:maximize');
+    });
   }
 
   setupPanelToggles() {
-    // Handle panel toggle buttons
-    document.addEventListener('click', (e) => {
-      const btn = e.target.closest('[data-action^="toggle-"]');
-      if (!btn) return;
-
-      const action = btn.dataset.action;
-      this.eventBus.emit(`action:${action}`);
-    });
-
-    // Specific panel toggles
-    this.eventBus.on('action:toggle-flow-nav', () => {
-      const panel = document.getElementById('flowNavigator');
-      if (panel) {
-        panel.style.display = panel.style.display === 'none' ? 'flex' : 'none';
-      }
-    });
-
-    this.eventBus.on('action:toggle-sources', () => {
-      const panel = document.querySelector('.sources-panel');
-      if (panel) {
-        panel.style.display = panel.style.display === 'none' ? 'flex' : 'none';
-      }
-    });
-
-    this.eventBus.on('action:toggle-console', () => {
-      const panel = document.getElementById('consolePanel');
-      if (panel) {
-        panel.style.display = panel.style.display === 'none' ? 'flex' : 'none';
-      }
-    });
+    const toggle = (id) => {
+      const panel = document.getElementById(id);
+      if (!panel) return;
+      panel.style.display = panel.style.display === 'none' ? '' : 'none';
+      this.eventBus.emit('layout:changed');
+    };
+    this.eventBus.on('action:toggle-flow-nav', () => toggle('flowNavigator'));
+    this.eventBus.on('action:toggle-sources', () => toggle('sourcesPanel'));
+    this.eventBus.on('action:toggle-console', () => toggle('consolePanel'));
   }
 
   updateClock() {
     const timeElement = document.getElementById('statusBarTime');
     if (timeElement) {
-      const now = new Date();
-      timeElement.textContent = now.toLocaleTimeString('en-US', { hour12: false });
+      timeElement.textContent = new Date().toLocaleTimeString('en-GB', { hour12: false });
     }
   }
 
   updateTitleBar(text) {
     const titleBarText = document.getElementById('titleBarText');
-    if (titleBarText) {
-      titleBarText.textContent = text;
-    }
+    if (titleBarText) titleBarText.textContent = text;
+    document.title = text;
   }
 
-  updateStatusBar(text) {
+  setStatusBar(text) {
+    clearTimeout(this.statusTimer);
     const statusBarText = document.getElementById('statusBarText');
     if (statusBarText) statusBarText.textContent = text;
-  }
-
-  // Alias used by main.js
-  setStatusBar(text) {
-    this.updateStatusBar(text);
     const toolbar = document.getElementById('toolbarStatus');
     if (toolbar) toolbar.textContent = text;
   }
 
-  showDialog(dialogType) {
-    console.log(`[UIManager] Show dialog: ${dialogType}`);
-    // TODO: Implement dialog system
-    alert(`Dialog not implemented: ${dialogType}`);
+  // Shows a status message, then returns to "Ready" unless something newer replaced it
+  flashStatus(text, readyText, ms = 3000) {
+    this.setStatusBar(text);
+    clearTimeout(this.statusTimer);
+    this.statusTimer = setTimeout(() => this.setStatusBar(readyText), ms);
   }
 }

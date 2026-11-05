@@ -37,6 +37,14 @@
   --text-disabled: #999999;
   --text-inverse: #ffffff;
   
+  /* Aliases used by component stylesheets */
+  --border-color: var(--border-default);
+  --panel-bg: var(--bg-toolbar);
+  --hover-bg: var(--accent-blue-hover);
+  --active-bg: var(--accent-blue-light);
+  --button-bg: var(--bg-toolbar);
+  --surface-color: var(--bg-editor);
+  
   /* Shadows */
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.12);
   --shadow-md: 0 2px 5px rgba(0, 0, 0, 0.25);
@@ -155,6 +163,122 @@ button:focus-visible {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+/* Minimize collapses the window to its title bar */
+#app.minimized > :not(#titleBar) {
+  display: none !important;
+}
+
+/* Editor fills the body; welcome screen and editor never show at the same time */
+.editor-body {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.editor-body > .welcome-screen,
+.editor-body > .code-editor {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Waveform takes the editor area; the file stays open underneath */
+.waveform-host {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-editor);
+  z-index: 5;
+}
+
+.waveform-host[hidden] {
+  display: none;
+}
+
+.waveform-host-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 12px;
+  background: var(--bg-toolbar);
+  border-bottom: 1px solid var(--border-default);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.waveform-host-body {
+  flex: 1;
+  min-height: 0;
+}
+
+.editor-body .code-editor {
+  height: 100%;
+}
+
+.welcome-screen[hidden],
+.code-editor[hidden] {
+  display: none !important;
+}
+
+.tree-group-content.drag-over,
+.sources-tree.drag-over {
+  outline: 2px dashed var(--accent-blue);
+  outline-offset: -2px;
+}
+
+.tree-filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  font-size: 11px;
+  background: #fff8d0;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.tree-filter-clear {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.cl.hidden-by-filter {
+  display: none;
+}
+
+.cl.found {
+  background: #fff3a0;
+}
+
+.dialog-form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.dialog-form-group input,
+.dialog-form-group select,
+.dialog-input {
+  padding: 5px 8px;
+  border: 1px solid var(--border-dark);
+  font-size: 12px;
+  font-family: inherit;
+}
+
+.dialog-pre {
+  font-family: Consolas, monospace;
+  font-size: 11px;
+  white-space: pre-wrap;
+  max-height: 50vh;
+  overflow: auto;
+  background: #fafafa;
+  border: 1px solid var(--border-light);
+  padding: 8px;
 }
 /* ============================================
    Title Bar
