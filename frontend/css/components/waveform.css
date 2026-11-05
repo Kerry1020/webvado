@@ -1,0 +1,72 @@
+/* Waveform Viewer Styles */
+
+.waveform-viewer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--surface-color);
+}
+
+.waveform-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--panel-bg);
+}
+
+.waveform-btn {
+  background: var(--button-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 2px;
+  padding: 4px 8px;
+  cursor: pointer;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.15s;
+}
+
+.waveform-btn:hover {
+  background: var(--hover-bg);
+}
+
+.waveform-btn:active {
+  background: var(--active-bg);
+}
+
+.waveform-btn svg {
+  display: block;
+}
+
+.waveform-spacer {
+  flex: 1;
+}
+
+.waveform-info {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.waveform-container {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  position: relative;
+}
+
+.waveform-names-canvas {
+  border-right: 1px solid var(--border-color);
+  cursor: default;
+}
+
+.waveform-canvas {
+  flex: 1;
+  cursor: grab;
+}
+
+.waveform-canvas:active {
+  cursor: grabbing;
+}

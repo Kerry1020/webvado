@@ -1,0 +1,743 @@
+/**
+ * WebVado Main Stylesheet
+ * Vivado 2017.4-inspired design system
+ */
+
+/* ============================================
+   CSS Variables (Design Tokens)
+   ============================================ */
+:root {
+  /* Windows XP/Vivado classic theme colors */
+  --bg-window: #ece9d8;
+  --bg-panel: #f5f5f5;
+  --bg-panel-dark: #f0f0f0;
+  --bg-panel-header: linear-gradient(to bottom, #717171, #5c5c5c);
+  --bg-titlebar: linear-gradient(to bottom, #f9f9f9, #e5e5e5);
+  --bg-toolbar: #f0f0f0;
+  --bg-editor: #ffffff;
+  --bg-console: #ffffff;
+  
+  /* Borders */
+  --border-default: #c8c8c8;
+  --border-dark: #adadad;
+  --border-light: #e0e0e0;
+  
+  /* Interactive elements */
+  --accent-blue: #0078d7;
+  --accent-blue-light: #bee6fd;
+  --accent-blue-hover: #e5f1fb;
+  --accent-green: #107c10;
+  --accent-red: #e81123;
+  --accent-orange: #ca5010;
+  --accent-purple: #6611aa;
+  
+  /* Text */
+  --text-primary: #000000;
+  --text-secondary: #444444;
+  --text-disabled: #999999;
+  --text-inverse: #ffffff;
+  
+  /* Shadows */
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.12);
+  --shadow-md: 0 2px 5px rgba(0, 0, 0, 0.25);
+  --shadow-lg: 0 4px 10px rgba(0, 0, 0, 0.3);
+  
+  /* Spacing */
+  --space-xs: 2px;
+  --space-sm: 4px;
+  --space-md: 8px;
+  --space-lg: 16px;
+  --space-xl: 24px;
+  
+  /* Z-index layers */
+  --z-base: 1;
+  --z-dropdown: 100;
+  --z-modal: 1000;
+  --z-tooltip: 2000;
+  --z-loading: 9999;
+}
+
+/* ============================================
+   Global Reset & Base Styles
+   ============================================ */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  background: var(--bg-window);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Code font for monospace elements */
+code, pre, .monospace {
+  font-family: Consolas, "Courier New", Monaco, monospace;
+  font-size: 12px;
+}
+
+/* Selection */
+::selection {
+  background: var(--accent-blue-light);
+  color: var(--text-primary);
+}
+
+/* Focus styles */
+:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+}
+
+button:focus-visible {
+  outline-offset: -2px;
+}
+
+/* ============================================
+   Loading Screen — overlay on top of #app
+   ============================================ */
+.loading-screen {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: var(--bg-window);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: var(--z-loading);
+  /* Auto-fade even without JS */
+  animation: fadeOutLoading 0.3s ease 1.5s forwards;
+}
+
+@keyframes fadeOutLoading {
+  to { opacity: 0; pointer-events: none; }
+}
+
+.loading-spinner {
+  width: 48px;
+  height: 48px;
+  border: 4px solid var(--border-light);
+  border-top-color: var(--accent-blue);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.loading-text {
+  margin-top: var(--space-lg);
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+/* ============================================
+   Main App Container
+   ============================================ */
+#app {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+/* ============================================
+   Title Bar
+   ============================================ */
+.title-bar {
+  height: 30px;
+  background: var(--bg-titlebar);
+  border-bottom: 1px solid var(--border-dark);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--space-md);
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.title-bar-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.app-icon {
+  width: 16px;
+  height: 16px;
+  background: linear-gradient(135deg, #8cc63f 50%, #009444);
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.title-bar-text {
+  font-size: 11px;
+  color: var(--text-primary);
+}
+
+.title-bar-controls {
+  display: flex;
+  gap: 0;
+}
+
+.title-bar-btn {
+  width: 45px;
+  height: 29px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.15s;
+}
+
+.title-bar-btn:hover {
+  background: #e0e0e0;
+}
+
+.title-bar-btn.close:hover {
+  background: var(--accent-red);
+  color: var(--text-inverse);
+}
+
+/* ============================================
+   Menu Bar
+   ============================================ */
+.menu-bar {
+  height: 21px;
+  background: var(--bg-toolbar);
+  border-bottom: 1px solid var(--border-default);
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-sm);
+  position: relative;
+  z-index: var(--z-dropdown);
+  flex-shrink: 0;
+}
+
+.menu {
+  padding: 2px var(--space-md);
+  cursor: pointer;
+  position: relative;
+  color: var(--text-primary);
+  font-size: 11px;
+  transition: background-color 0.15s;
+}
+
+.menu:hover,
+.menu.open {
+  background: var(--accent-blue-hover);
+}
+
+.dropdown {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  background: var(--bg-toolbar);
+  border: 1px solid var(--border-dark);
+  box-shadow: var(--shadow-md);
+  min-width: 200px;
+  z-index: var(--z-dropdown);
+}
+
+.menu.open .dropdown {
+  display: block;
+}
+
+.dropdown-item {
+  width: 100%;
+  padding: 5px 20px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--text-primary);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  transition: background-color 0.15s;
+}
+
+.dropdown-item:hover {
+  background: var(--accent-blue-hover);
+}
+
+.dropdown-item:disabled {
+  color: var(--text-disabled);
+  cursor: not-allowed;
+}
+
+.dropdown-separator {
+  height: 1px;
+  background: var(--border-default);
+  margin: 2px 0;
+}
+
+.shortcut {
+  margin-left: var(--space-lg);
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+/* ============================================
+   Toolbar
+   ============================================ */
+.toolbar {
+  height: 32px;
+  background: var(--bg-toolbar);
+  border-bottom: 1px solid var(--border-default);
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-sm);
+  gap: 1px;
+  flex-shrink: 0;
+}
+
+.toolbar-btn {
+  width: 24px;
+  height: 24px;
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  border-radius: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+  color: var(--text-primary);
+}
+
+.toolbar-btn:hover {
+  border-color: var(--accent-blue);
+  background: var(--accent-blue-hover);
+}
+
+.toolbar-btn:active {
+  background: var(--accent-blue-light);
+}
+
+.toolbar-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.toolbar-separator {
+  width: 1px;
+  height: 20px;
+  background: var(--border-default);
+  margin: 0 var(--space-sm);
+}
+
+.toolbar-label {
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.toolbar-status {
+  font-size: 11px;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+/* ============================================
+   Main Container (Flow Nav + Center + Console)
+   ============================================ */
+.main-container {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* ============================================
+   Flow Navigator (Left Sidebar)
+   ============================================ */
+.flow-navigator {
+  width: 220px;
+  min-width: 120px;
+  max-width: 400px;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border-default);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.flow-nav-content {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* ============================================
+   Center Panel (Sources + Editor)
+   ============================================ */
+.center-panel {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  min-width: 0;
+}
+
+/* ============================================
+   Sources Panel
+   ============================================ */
+.sources-panel {
+  width: 280px;
+  min-width: 150px;
+  border-right: 1px solid var(--border-default);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  overflow: hidden;
+  background: var(--bg-editor);
+}
+
+.tab-bar {
+  height: 24px;
+  background: var(--bg-toolbar);
+  border-bottom: 1px solid var(--border-default);
+  display: flex;
+  flex-shrink: 0;
+}
+
+.tab {
+  padding: 4px 12px;
+  border: none;
+  border-right: 1px solid var(--border-default);
+  background: #dedede;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-primary);
+  transition: background-color 0.15s;
+}
+
+.tab.active {
+  background: var(--bg-editor);
+  border-bottom: 2px solid var(--accent-blue);
+}
+
+.tab:hover:not(.active) {
+  background: #ebebeb;
+}
+
+.sources-toolbar {
+  height: 22px;
+  background: #f8f8f8;
+  border-bottom: 1px solid var(--border-light);
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-sm);
+  gap: var(--space-xs);
+  flex-shrink: 0;
+}
+
+.sources-toolbar-btn {
+  width: 18px;
+  height: 18px;
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+
+.sources-toolbar-btn:hover {
+  border-color: var(--accent-blue);
+  background: var(--accent-blue-hover);
+}
+
+.sources-tree {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-xs);
+}
+
+/* ============================================
+   Editor Area
+   ============================================ */
+.editor-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.editor-tabs {
+  height: 24px;
+  background: var(--bg-toolbar);
+  border-bottom: 1px solid var(--border-default);
+  display: flex;
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+
+.editor-body {
+  flex: 1;
+  overflow: auto;
+  background: var(--bg-editor);
+}
+
+/* Welcome Screen */
+.welcome-screen {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-xl);
+  text-align: center;
+}
+
+.welcome-screen h2 {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent-blue);
+  margin-bottom: var(--space-md);
+}
+
+.welcome-screen p {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin-bottom: var(--space-xl);
+}
+
+.welcome-actions {
+  display: flex;
+  gap: var(--space-lg);
+  margin-bottom: var(--space-xl);
+}
+
+.welcome-links {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.welcome-links a {
+  color: var(--accent-blue);
+  text-decoration: none;
+  font-size: 12px;
+}
+
+.welcome-links a:hover {
+  text-decoration: underline;
+}
+
+/* ============================================
+   Console Panel
+   ============================================ */
+.console-panel {
+  height: 185px;
+  border-top: 1px solid var(--border-default);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  background: var(--bg-console);
+}
+
+.console-tabs {
+  height: 23px;
+  background: var(--bg-toolbar);
+  border-bottom: 1px solid var(--border-default);
+  display: flex;
+  flex-shrink: 0;
+}
+
+.console-tab {
+  padding: 3px 12px;
+  border: none;
+  border-right: 1px solid var(--border-default);
+  background: #dedede;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-primary);
+}
+
+.console-tab.active {
+  background: var(--bg-console);
+}
+
+.console-tab:hover:not(.active) {
+  background: #e8e8e8;
+}
+
+.console-toolbar {
+  height: 22px;
+  background: #f8f8f8;
+  border-bottom: 1px solid var(--border-light);
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-sm);
+  gap: var(--space-xs);
+  flex-shrink: 0;
+}
+
+.console-toolbar-btn {
+  width: 18px;
+  height: 18px;
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.console-toolbar-btn:hover {
+  border-color: var(--accent-blue);
+  background: var(--accent-blue-hover);
+}
+
+.console-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-sm) var(--space-md);
+  font-family: Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+/* Console log line types */
+.cl         { margin: 1px 0; }
+.cl.i       { color: var(--accent-blue); }
+.cl.s       { color: var(--accent-green); }
+.cl.w       { color: var(--accent-orange); }
+.cl.e       { color: var(--accent-red); }
+.cl.c       { color: var(--accent-purple); }
+
+.console-input-row {
+  height: 22px;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-md);
+  border-top: 1px solid var(--border-light);
+  background: #fafafa;
+  gap: var(--space-sm);
+  flex-shrink: 0;
+}
+
+.console-prompt {
+  color: var(--accent-blue);
+  font-family: Consolas, monospace;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.console-input {
+  flex: 1;
+  border: none;
+  outline: none;
+  font-family: Consolas, monospace;
+  font-size: 11px;
+  background: transparent;
+  color: var(--text-primary);
+}
+
+/* ============================================
+   Status Bar
+   ============================================ */
+.status-bar {
+  height: 20px;
+  background: linear-gradient(to bottom, var(--bg-toolbar), #e0e0e0);
+  border-top: 1px solid var(--border-dark);
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-md);
+  gap: 0;
+  font-size: 10px;
+  color: var(--text-primary);
+  flex-shrink: 0;
+}
+
+.status-bar-separator {
+  margin: 0 var(--space-md);
+  color: var(--text-disabled);
+}
+
+/* ============================================
+   Panel Header (Reusable Component)
+   ============================================ */
+.panel-header {
+  height: 24px;
+  background: var(--bg-panel-header);
+  border-bottom: 1px solid var(--border-dark);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 6px;
+  font-weight: 600;
+  color: var(--text-inverse);
+  flex-shrink: 0;
+  font-size: 11px;
+}
+
+.panel-header-btn {
+  width: 18px;
+  height: 18px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-inverse);
+  cursor: pointer;
+  font-size: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.panel-header-btn:hover {
+  border-color: rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* ============================================
+   Scrollbar Styling
+   ============================================ */
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-toolbar);
+}
+
+::-webkit-scrollbar-thumb {
+  background: #c0c0c0;
+  border: 1px solid var(--border-dark);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #a0a0a0;
+}
+
+::-webkit-scrollbar-corner {
+  background: var(--bg-toolbar);
+}

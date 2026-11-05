@@ -1,0 +1,10 @@
+/**
+ * CodeMirror placeholder styles
+ * Will be replaced with real CodeMirror 6 CSS
+ */
+
+.cm-editor {
+  height: 100%;
+  font-family: Consolas, 'Courier New', monospace;
+  font-size: 12px;
+}

@@ -1,0 +1,297 @@
+/* Dialog System Styles */
+
+.dialog-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: dialogFadeIn 0.2s ease-out;
+}
+
+.dialog {
+  background: white;
+  border: 1px solid #a0a0a0;
+  border-radius: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  min-width: 400px;
+  max-width: 600px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  animation: dialogSlideIn 0.2s ease-out;
+}
+
+@keyframes dialogFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes dialogSlideIn {
+  from { transform: translateY(-20px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.dialog-title-bar {
+  background: linear-gradient(to bottom, #1888e8, #0060c0);
+  color: white;
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-radius: 4px 4px 0 0;
+  user-select: none;
+}
+
+.dialog-title {
+  font-weight: 600;
+  font-size: 13px;
+  flex: 1;
+}
+
+.dialog-close {
+  background: transparent;
+  border: none;
+  color: white;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 2px;
+  transition: background-color 0.15s;
+}
+
+.dialog-close:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.dialog-body {
+  padding: 20px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 80px;
+  font-size: 12px;
+  color: #2d2d2d;
+}
+
+.dialog-body p {
+  margin: 0 0 12px 0;
+  line-height: 1.5;
+}
+
+.dialog-footer {
+  padding: 12px 16px;
+  border-top: 1px solid #d0d0d0;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  background: #f0f0f0;
+}
+
+.dialog-footer .btn {
+  min-width: 80px;
+  padding: 6px 16px;
+  font-size: 12px;
+}
+
+/* Form */
+.dialog-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.dialog-form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dialog-form-group label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #2d2d2d;
+}
+
+.dialog-form-group input,
+.dialog-form-group select {
+  padding: 6px 8px;
+  border: 1px solid #a0a0a0;
+  border-radius: 2px;
+  font-family: "Segoe UI", Tahoma, sans-serif;
+  font-size: 12px;
+  background: white;
+  color: #2d2d2d;
+}
+
+.dialog-form-group input:focus,
+.dialog-form-group select:focus {
+  outline: none;
+  border-color: #1888e8;
+  box-shadow: 0 0 0 2px rgba(24, 136, 232, 0.2);
+}
+
+/* Settings Dialog */
+.settings-dialog {
+  width: 600px;
+  max-width: 90vw;
+}
+
+.settings-layout {
+  display: flex;
+  height: 400px;
+}
+
+.settings-categories {
+  width: 160px;
+  border-right: 1px solid #d0d0d0;
+  overflow-y: auto;
+  background: #f5f5f5;
+}
+
+.settings-category {
+  padding: 10px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: background-color 0.15s;
+  border-left: 3px solid transparent;
+}
+
+.settings-category:hover {
+  background: #e0e0e0;
+}
+
+.settings-category.active {
+  background: #1888e8;
+  color: white;
+  font-weight: 500;
+  border-left-color: #0060c0;
+}
+
+.settings-content {
+  flex: 1;
+  overflow-y: auto;
+  background: white;
+}
+
+.settings-panel {
+  display: none;
+  padding: 20px;
+}
+
+.settings-panel.active {
+  display: block;
+}
+
+.settings-panel h3 {
+  margin: 0 0 16px 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #2d2d2d;
+  border-bottom: 2px solid #1888e8;
+  padding-bottom: 8px;
+}
+
+.settings-group {
+  margin-bottom: 16px;
+}
+
+.settings-group label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #2d2d2d;
+  margin-bottom: 4px;
+}
+
+.settings-group input[type="checkbox"] {
+  cursor: pointer;
+}
+
+.settings-group input[type="number"],
+.settings-group select {
+  padding: 6px 8px;
+  border: 1px solid #a0a0a0;
+  border-radius: 2px;
+  font-size: 12px;
+  background: white;
+}
+
+.settings-group input[type="number"] {
+  width: 120px;
+}
+
+/* About Dialog */
+.about-content {
+  text-align: center;
+  padding: 8px;
+}
+
+.about-content h2 {
+  margin: 16px 0 8px 0;
+  font-size: 24px;
+  font-weight: 600;
+  color: #0060c0;
+}
+
+.about-version {
+  margin: 4px 0 16px 0;
+  font-size: 12px;
+  color: #666;
+}
+
+.about-description {
+  margin: 16px 0;
+  line-height: 1.6;
+  font-size: 13px;
+  color: #2d2d2d;
+}
+
+.about-tools {
+  margin: 20px 0;
+  text-align: left;
+}
+
+.about-tools h4 {
+  margin: 0 0 12px 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #2d2d2d;
+}
+
+.tool-status {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px;
+  margin: 4px 0;
+  background: #f5f5f5;
+  border-radius: 2px;
+  font-size: 12px;
+}
+
+.tool-name {
+  font-weight: 500;
+}
+
+.tool-found {
+  color: #28a745;
+  font-weight: 600;
+}
+
+.tool-missing {
+  color: #dc3545;
+  font-weight: 600;
+}
+
+.about-footer {
+  margin: 16px 0 8px 0;
+  font-size: 11px;
+  color: #666;
+  font-style: italic;
+}

@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebVado Component Test</title>
+    <link rel="stylesheet" href="/css/main.css">
+    <link rel="stylesheet" href="/css/components.css">
+    <link rel="stylesheet" href="/css/components/dialog.css">
+    <link rel="stylesheet" href="/css/components/waveform.css">
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: "Segoe UI", Tahoma, sans-serif;
+            background: var(--bg-main);
+        }
+        .test-section {
+            margin-bottom: 20px;
+        }
+        .test-container {
+            border: 1px solid var(--border-color);
+            padding: 20px;
+            background: var(--surface-color);
+            margin-top: 10px;
+        }
+        h2 {
+            color: var(--text-primary);
+            margin-top: 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>WebVado Component Test Page</h1>
+    
+    <div class="test-section">
+        <h2>1. Dialog System</h2>
+        <button class="btn btn-primary" onclick="testAlert()">Test Alert</button>
+        <button class="btn" onclick="testConfirm()">Test Confirm</button>
+        <button class="btn" onclick="testPrompt()">Test Prompt</button>
+        <button class="btn" onclick="testNewProject()">Test New Project Dialog</button>
+        <button class="btn" onclick="testSettings()">Test Settings Dialog</button>
+        <button class="btn" onclick="testAbout()">Test About Dialog</button>
+    </div>
+    
+    <div class="test-section">
+        <h2>2. Code Editor</h2>
+        <div class="test-container" style="height: 300px;">
+            <div id="editor-test"></div>
+        </div>
+    </div>
+    
+    <div class="test-section">
+        <h2>3. Waveform Viewer</h2>
+        <div class="test-container" style="height: 400px;">
+            <div id="waveform-test"></div>
+        </div>
+    </div>
+
+    <script type="module">
+        import { Dialog } from '/js/components/Dialog.js';
+        import { NewProjectDialog } from '/js/components/dialogs/NewProjectDialog.js';
+        import { SettingsDialog } from '/js/components/dialogs/SettingsDialog.js';
+        import { AboutDialog } from '/js/components/dialogs/AboutDialog.js';
+        import { CodeEditor } from '/js/editor/CodeEditor.js';
+        import { WaveformViewer } from '/js/components/WaveformViewer.js';
+
+        // Make available globally for onclick handlers
+        window.testAlert = () => Dialog.alert('Test Alert', 'This is an alert dialog!');
+        window.testConfirm = async () => {
+            const result = await Dialog.confirm('Test Confirm', 'Do you agree?');
+            Dialog.alert('Result', `You clicked: ${result ? 'OK' : 'Cancel'}`);
+        };
+        window.testPrompt = async () => {
+            const result = await Dialog.prompt('Test Prompt', 'Enter your name:', 'John Doe');
+            if (result !== null) {
+                Dialog.alert('Result', `You entered: ${result}`);
+            }
+        };
+        window.testNewProject = () => {
+            NewProjectDialog.show((data) => {
+                Dialog.alert('Project Created', `Name: ${data.name}\nPart: ${data.part}\nLanguage: ${data.language}`);
+            });
+        };
+        window.testSettings = () => SettingsDialog.show({});
+        window.testAbout = () => AboutDialog.show();
+
+        // Initialize Code Editor
+        const editorContainer = document.getElementById('editor-test');
+        const editor = new CodeEditor(editorContainer);
+        editor.openFile('test.v', `module counter (
+    input wire clk,
+    input wire rst,
+    output reg [7:0] count
+);
+    always @(posedge clk or posedge rst) begin
+        if (rst)
+            count <= 8'b0;
+        else
+            count <= count + 1;
+    end
+endmodule`);
+
+        // Set some test errors
+        editor.setErrors([
+            { line: 3, message: 'Unused signal detected', severity: 'warning' },
+            { line: 8, message: 'Syntax error: missing semicolon', severity: 'error' }
+        ]);
+
+        // Initialize Waveform Viewer
+        const waveformContainer = document.getElementById('waveform-test');
+        const waveform = new WaveformViewer(waveformContainer);
+        
+        // Generate test waveform data
+        const testData = {
+            timescale: '1ns',
+            signals: [
+                {
+                    id: 'clk',
+                    name: 'clk',
+                    type: 'wire',
+                    width: 1,
+                    values: []
+                },
+                {
+                    id: 'rst',
+                    name: 'rst',
+                    type: 'wire',
+                    width: 1,
+                    values: []
+                },
+                {
+                    id: 'count',
+                    name: 'count[7:0]',
+                    type: 'reg',
+                    width: 8,
+                    values: []
+                }
+            ]
+        };
+
+        // Generate clock signal
+        for (let t = 0; t < 1000; t += 10) {
+            testData.signals[0].values.push({ time: t, value: t % 20 < 10 ? '0' : '1' });
+        }
+
+        // Generate reset signal
+        testData.signals[1].values.push({ time: 0, value: '1' });
+        testData.signals[1].values.push({ time: 50, value: '0' });
+
+        // Generate counter
+        for (let t = 0; t < 1000; t += 20) {
+            const count = Math.floor(t / 20);
+            testData.signals[2].values.push({ time: t, value: count.toString(2).padStart(8, '0') });
+        }
+
+        waveform.setData(testData);
+
+        console.log('All components initialized successfully!');
+    </script>
+</body>
+</html>

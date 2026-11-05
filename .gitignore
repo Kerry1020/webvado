@@ -1,0 +1,44 @@
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+
+# Logs
+*.log
+logs/
+/tmp/*.log
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# User projects (don't commit user data)
+projects/
+!projects/.gitkeep
+
+# Test files
+test-*.html
+test-*.cjs
+test-*.js
+
+# Build artifacts
+dist/
+build/
+
+# Temporary
+tmp/
+temp/
