@@ -4,20 +4,29 @@ import path from 'path';
 import { createHash } from 'node:crypto';
 import pino from 'pino';
 import { parseVCD } from '../parsers/VCDParser.js';
+import { normalizeXdcForNextpnr } from './XdcNormalize.js';
 
 const logger = pino({ name: 'BuildService' });
 
 const HDL_EXT = new Set(['.v', '.sv']);
 const MAX_LOG = 200_000;
 const SYNTH_OUTPUTS = ['synth.json', 'synth_stat.json', 'synthesis-config.json'];
-const IMPLEMENT_OUTPUTS = ['implementation.asc', 'implementation.json', 'implementation-config.json'];
-const BITSTREAM_OUTPUTS = ['bitstream.bin', 'bitstream-config.json'];
+const IMPLEMENT_OUTPUTS = ['implementation.asc', 'implementation.json', 'implementation-config.json',
+  'xc7-design.json', 'xc7-design.fasm', 'xc7-design.xdc', 'xc7-implementation.json'];
+const BITSTREAM_OUTPUTS = ['bitstream.bin', 'bitstream-config.json', 'xc7-design.frames'];
 
 // Yosys synth command per device family (from project.part)
 const SYNTH_BY_FAMILY = {
   ice40: 'synth_ice40',
   ecp5: 'synth_ecp5',
+  xc7: 'synth_xilinx',
   generic: 'synth'
+};
+
+// openXC7 (Docker) is used for Artix-7 place & route / bitstream.
+const OPENXC7_IMAGE = process.env.WEBVADO_OPENXC7_IMAGE || 'regymm/openxc7:latest';
+const XC7_PARTS = {
+  xc7a35t: { bitstreamPart: 'xc7a35tcsg324-1', chipdb: 'xc7a35t.bin', dbFamily: 'artix7' }
 };
 
 export class BuildError extends Error {
@@ -156,7 +165,10 @@ export class BuildService {
       const fingerprint = await this.fingerprint(project);
 
       const read = this.rel(project, design).map(f => `read_verilog -sv -Isrcs/rtl ${this.quote(f)}`).join('; ');
-      const synth = `${SYNTH_BY_FAMILY[family]} ${top ? `-top ${top}` : ''}`;
+      // openXC7 expects a flattened netlist with per-bit top-level IO names.
+      const synth = family === 'xc7'
+        ? `synth_xilinx -flatten ${top ? `-top ${top}` : ''}`
+        : `${SYNTH_BY_FAMILY[family]} ${top ? `-top ${top}` : ''}`;
       const script = [
         read,
         `hierarchy -check ${top ? `-top ${top}` : '-auto-top'}`,
@@ -189,10 +201,18 @@ export class BuildService {
   }
 
   device(project, options = {}) {
+    const part = String(project.part).toLowerCase();
+    if (part === 'xc7a35t') {
+      const frequency = Number(options.frequency ?? project.settings?.target_frequency_mhz ?? 100);
+      if (!Number.isFinite(frequency) || frequency <= 0 || frequency > 1000) {
+        throw new BuildError('INVALID_INPUT', 'frequency must be greater than 0 and at most 1000 MHz');
+      }
+      return { family: 'xc7', part, bitstreamPart: XC7_PARTS.xc7a35t.bitstreamPart, frequency };
+    }
     const devices = { ice40hx8k: { chip: 'hx8k', package: 'ct256' }, ice40up5k: { chip: 'up5k', package: 'sg48' } };
-    const device = devices[String(project.part).toLowerCase()];
+    const device = devices[part];
     if (!device) throw new BuildError('UNSUPPORTED_DEVICE',
-      'Physical implementation supports ice40hx8k/ct256 and ice40up5k/sg48. ECP5 and other devices are synthesis-only.');
+      'Physical implementation supports ice40hx8k/ct256, ice40up5k/sg48 and xc7a35t (EGO1). ECP5 and other devices are synthesis-only.');
     const pkg = options.package || project.settings?.package || device.package;
     if (pkg !== device.package) throw new BuildError('INVALID_INPUT', `${project.part} currently supports package ${device.package}`);
     const frequency = Number(options.frequency ?? project.settings?.target_frequency_mhz ?? 50);
@@ -200,6 +220,28 @@ export class BuildService {
       throw new BuildError('INVALID_INPUT', 'frequency must be greater than 0 and at most 1000 MHz');
     }
     return { ...device, package: pkg, frequency, part: project.part };
+  }
+
+  xc7ChipdbPath() {
+    const env = process.env.WEBVADO_XC7_CHIPDB;
+    if (env) return path.resolve(env);
+    const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../..');
+    return path.join(root, 'tools', 'chipdb', XC7_PARTS.xc7a35t.chipdb);
+  }
+
+  // Run a command inside the openXC7 image with the project mounted at /w.
+  async dockerRun(project, shellCmd, { timeout = 600000 } = {}) {
+    const chipdb = this.xc7ChipdbPath();
+    if (!await fs.pathExists(chipdb)) {
+      throw new BuildError('CHIPDB_MISSING',
+        `Artix-7 chip database not found at ${chipdb}. Generate it once with the openXC7 image (see docs/EGO1.md).`);
+    }
+    const args = ['run', '--rm', '--platform', 'linux/amd64',
+      '-v', `${project.path}:/w`, '-v', `${chipdb}:/chipdb/${path.basename(chipdb)}:ro`,
+      OPENXC7_IMAGE, 'bash', '-lc', `cd /w && ${shellCmd}`];
+    const result = await execa('docker', args, { reject: false, all: true, timeout });
+    const output = result.all || '';
+    return { ...result, all: output.length > MAX_LOG ? `[Earlier log truncated]\n${output.slice(-MAX_LOG)}` : output };
   }
 
   async implement(projectId, options = {}) {
@@ -214,6 +256,33 @@ export class BuildService {
       if (synthesis?.fingerprint !== await this.fingerprint(project)) {
         throw new BuildError('PREREQUISITE_MISSING', 'Design sources or device settings changed. Run synthesis again.');
       }
+
+      if (device.family === 'xc7') {
+        const xdc = await normalizeXdcForNextpnr(path.join(project.path, 'srcs/constrs'));
+        if (!xdc) {
+          throw new BuildError('NO_CONSTRAINTS',
+            'Artix-7 implementation needs pin constraints: add an .xdc file under srcs/constrs (Add Sources > Constraints).');
+        }
+        const relXdc = '.webvado/build/xc7-design.xdc';
+        await fs.writeFile(path.join(buildDir, 'xc7-design.xdc'), xdc);
+        const cmd = `nextpnr-xilinx --chipdb /chipdb/${XC7_PARTS.xc7a35t.chipdb} ` +
+          `--xdc ${relXdc} --json .webvado/build/synth.json ` +
+          `--write .webvado/build/xc7-implementation.json --fasm .webvado/build/xc7-design.fasm`;
+        const run = await this.dockerRun(project, cmd);
+        if (run.exitCode !== 0) {
+          await this.invalidate(buildDir, IMPLEMENT_OUTPUTS);
+          throw new BuildError('IMPLEMENT_FAILED', 'Place and route failed', { log: run.all });
+        }
+        if (fingerprint !== await this.fingerprint(await this.requireProject(projectId), true)) {
+          throw new BuildError('SOURCE_CHANGED', 'Design changed during implementation. Run synthesis and implementation again.');
+        }
+        await fs.writeJson(path.join(buildDir, 'implementation-config.json'), { ...device, fingerprint });
+        const report = { ...device, utilization: this.parseNextpnrReport(run.all) };
+        await this.recordStatus(project, 'last_implementation', { success: true, ...device });
+        return { success: true, log: run.all, report,
+          artifacts: await this.artifacts(project, ['xc7-design.fasm', 'xc7-implementation.json']) };
+      }
+
       const tool = await this.toolchainManager.requireTool('nextpnr-ice40');
       const constraints = (await this.findFiles(path.join(project.path, 'srcs/constrs'), new Set(['.pcf'])));
       const pcf = path.join(buildDir, 'constraints.pcf');
@@ -244,15 +313,32 @@ export class BuildService {
       const device = this.device(project, options);
       await fs.remove(path.join(buildDir, 'bitstream.bin'));
       const configPath = path.join(buildDir, 'implementation-config.json');
-      if (!await fs.pathExists(configPath) || !await fs.pathExists(path.join(buildDir, 'implementation.asc'))) {
+      if (!await fs.pathExists(configPath)) {
         throw new BuildError('PREREQUISITE_MISSING', 'Run implementation successfully before generating a bitstream.');
       }
       const config = await fs.readJson(configPath);
-      if (config.part !== device.part || config.package !== device.package || config.frequency !== device.frequency || config.fingerprint !== await this.fingerprint(project, true)) {
+      if (config.part !== device.part || config.frequency !== device.frequency || config.fingerprint !== await this.fingerprint(project, true)) {
         throw new BuildError('PREREQUISITE_MISSING', 'Implementation settings changed. Run implementation again with these settings.');
       }
-      const tool = await this.toolchainManager.requireTool('icepack');
-      const run = await this.exec(project, tool.path, [path.join(buildDir, 'implementation.asc'), path.join(buildDir, 'bitstream.bin')]);
+
+      let run;
+      if (device.family === 'xc7') {
+        if (!await fs.pathExists(path.join(buildDir, 'xc7-design.fasm'))) {
+          throw new BuildError('PREREQUISITE_MISSING', 'Run implementation successfully before generating a bitstream.');
+        }
+        const db = `/nextpnr-xilinx/xilinx/external/prjxray-db/${XC7_PARTS.xc7a35t.dbFamily}`;
+        const part = device.bitstreamPart;
+        const cmd = `/prjxray/env/bin/fasm2frames --part ${part} --db-root ${db} .webvado/build/xc7-design.fasm > .webvado/build/xc7-design.frames` +
+          ` && xc7frames2bit --part_file ${db}/${part}/part.yaml --part_name ${part}` +
+          ` --frm_file .webvado/build/xc7-design.frames --output_file .webvado/build/bitstream.bin`;
+        run = await this.dockerRun(project, cmd);
+      } else {
+        if (!await fs.pathExists(path.join(buildDir, 'implementation.asc'))) {
+          throw new BuildError('PREREQUISITE_MISSING', 'Run implementation successfully before generating a bitstream.');
+        }
+        const tool = await this.toolchainManager.requireTool('icepack');
+        run = await this.exec(project, tool.path, [path.join(buildDir, 'implementation.asc'), path.join(buildDir, 'bitstream.bin')]);
+      }
       if (run.exitCode !== 0) {
         await fs.remove(path.join(buildDir, 'bitstream.bin'));
         throw new BuildError('BITSTREAM_FAILED', 'Bitstream generation failed', { log: run.all });
@@ -265,7 +351,7 @@ export class BuildService {
       await fs.writeJson(path.join(buildDir, 'bitstream-config.json'), { ...config, digest,
         settings: project.settings, created: new Date().toISOString() });
       await this.recordStatus(project, 'last_bitstream', { success: true, ...device });
-      return { success: true, log: run.all || `icepack generated bitstream.bin (${artifacts[0].size} bytes)`,
+      return { success: true, log: run.all || `generated bitstream.bin (${artifacts[0].size} bytes)`,
         report: { ...device, bytes: artifacts[0].size }, artifacts };
     });
   }
@@ -298,7 +384,7 @@ export class BuildService {
 
   async fingerprint(project, constraints = false) {
     const files = await this.findFiles(path.join(project.path, 'srcs/rtl'), new Set(['.v', '.sv', '.vh', '.svh']));
-    if (constraints) files.push(...await this.findFiles(path.join(project.path, 'srcs/constrs'), new Set(['.pcf'])));
+    if (constraints) files.push(...await this.findFiles(path.join(project.path, 'srcs/constrs'), new Set(['.pcf', '.xdc'])));
     const hash = createHash('sha256').update(JSON.stringify([project.part, project.top_module]));
     for (const file of files.sort()) hash.update(path.relative(project.path, file)).update('\0').update(await fs.readFile(file)).update('\0');
     return hash.digest('hex');
@@ -441,7 +527,20 @@ export class BuildService {
   family(part = '') {
     if (/^ice40/i.test(part)) return 'ice40';
     if (/^ecp5/i.test(part)) return 'ecp5';
+    if (/^xc7[aks]?|^artix/i.test(part)) return 'xc7';
     return 'generic';
+  }
+
+  /** Extract the "Device utilisation" table from a nextpnr-xilinx log. */
+  parseNextpnrReport(log = '') {
+    const used = {};
+    const m = log.match(/Max frequency for clock [^\n']*:\s*([\d.]+) MHz/);
+    if (m) used.fmax_mhz = parseFloat(m[1]);
+    for (const line of log.split('\n')) {
+      const u = line.match(/Info:\s+\*?\s*([A-Z0-9_]+):\s*(\d+)\/\s*(\d+)/);
+      if (u && !used[u[1]]) used[u[1]] = { used: Number(u[2]), total: Number(u[3]) };
+    }
+    return used;
   }
 
   // First testbench module that is not instantiated by another testbench file
