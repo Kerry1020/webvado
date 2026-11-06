@@ -26,6 +26,7 @@ export class NewProjectDialog {
           <option value="ice40hx8k">${t('dialog.newProject.parts.ice40hx8k')}</option>
           <option value="ice40up5k">${t('dialog.newProject.parts.ice40up5k')}</option>
           <option value="ecp5-85k">${t('dialog.newProject.parts.ecp5_85k')}</option>
+          <option value="xc7a35t">${t('dialog.newProject.parts.xc7a35t')}</option>
           <option value="generic">${t('dialog.newProject.parts.generic')}</option>
         </select>
       </div>

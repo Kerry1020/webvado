@@ -43,9 +43,11 @@ export class CodeEditor {
     header.appendChild(this.fileLabel);
     header.appendChild(this.closeBtn);
     
-    // Editor area
+    // Editor area (unique class so it does not collide with the outer
+    // `.editor-area` container in index.html, whose rule sets
+    // flex-direction: column and would collapse the textarea)
     const editorArea = document.createElement('div');
-    editorArea.className = 'editor-area';
+    editorArea.className = 'editor-split';
     
     // Line numbers
     this.lineNumbers = document.createElement('div');

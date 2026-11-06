@@ -252,6 +252,7 @@ const PATH = 'srcs/rtl/top.v';
     assert.equal((await page.locator('[data-menu="file"] > span').innerText()).trim(), 'File');
     pass('language switches visible UI, preserves project during toggle, persists preference on reload');
     await require('./editor-safety.e2e.cjs');
+    await require('./editor-layout.e2e.cjs')(page, api);
     await require('./netlist.e2e.cjs');
     await require('./build-flow.cjs')(page, api);
     assert.deepEqual(errors, []);
