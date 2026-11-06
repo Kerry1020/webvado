@@ -55,7 +55,7 @@ export const zh_CN = {
     checkSyntax: '检查语法',
     compileOrder: '报告编译顺序',
     
-    flowNavigator: 'Flow Navigator',
+    flowNavigator: '流程向导',
     sources: '源文件',
     console: '控制台',
     
@@ -78,7 +78,7 @@ export const zh_CN = {
     ready: '就绪',
     noProject: '未打开工程',
     project: '工程: {name}',
-    part: 'Part: {part}',
+    part: '器件: {part}',
     saving: '保存中...',
     saved: '已保存',
     compiling: '编译中...',
@@ -114,6 +114,7 @@ export const zh_CN = {
         ice40hx8k: 'iCE40 HX8K',
         ice40up5k: 'iCE40 UP5K',
         ecp5_85k: 'ECP5 85K',
+        xc7a35t: 'Artix-7 XC7A35T (EGO1)',
         generic: '通用 (Generic)'
       }
     },
@@ -291,7 +292,7 @@ export const zh_CN = {
 
   // 面板与标签页
   panel: {
-    flowNavigator: 'Flow Navigator',
+    flowNavigator: '流程向导',
     sources: '源文件',
     netlist: '网表',
     compileOrder: '编译顺序',

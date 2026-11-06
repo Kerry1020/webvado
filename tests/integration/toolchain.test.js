@@ -83,6 +83,49 @@ test('physical implementation clearly rejects unsupported devices', async () => 
   await assert.rejects(service.implement(project.id), { code: 'UNSUPPORTED_DEVICE' });
 });
 
+// Artix-7 (EGO1) flow: local yosys synth + nextpnr-xilinx/fasm2frames/xc7frames2bit
+// inside the openXC7 Docker image. Requires:
+//   docker, regymm/openxc7:latest pulled, tools/chipdb/xc7a35t.bin present.
+test('real xc7a35t synthesis, routing and bitstream via openXC7 docker', { timeout: 900000 }, async () => {
+  const { execFileSync } = await import('node:child_process');
+  let dockerOk = false;
+  try { execFileSync('docker', ['image', 'inspect', 'regymm/openxc7:latest'], { stdio: 'ignore' }); dockerOk = true; } catch {}
+  assert.equal(dockerOk, true, 'openXC7 docker image missing: docker pull regymm/openxc7:latest');
+  const chipdb = process.env.WEBVADO_XC7_CHIPDB
+    || path.resolve(import.meta.dirname, '../../tools/chipdb/xc7a35t.bin');
+  assert.ok(await fs.pathExists(chipdb), `chipdb missing at ${chipdb} (see docs/EGO1.md)`);
+
+  const project = await fixture('xc7_flow', 'xc7a35t');
+  await fs.ensureDir(path.join(project.path, 'srcs/constrs'));
+  await fs.writeFile(path.join(project.path, 'srcs/constrs/top.xdc'),
+    'set_property -dict { PACKAGE_PIN P17 IOSTANDARD LVCMOS33 } [get_ports { clk }];\n' +
+    'set_property -dict { PACKAGE_PIN R1 IOSTANDARD LVCMOS33 } [get_ports { led }];\n');
+
+  const synthesis = await service.synthesize(project.id);
+  assert.equal(synthesis.success, true);
+  assert.equal(synthesis.report.top, 'counter');
+  assert.ok(synthesis.report.cells > 0);
+
+  const implementation = await service.implement(project.id, { frequency: 100 });
+  assert.equal(implementation.success, true);
+  assert.ok(implementation.artifacts.some(a => a.name === 'xc7-design.fasm'));
+  const normalized = await fs.readFile(path.join(project.path, '.webvado/build/xc7-design.xdc'), 'utf8');
+  assert.match(normalized, /^set_property PACKAGE_PIN P17 \[get_ports clk\]$/m);
+  assert.doesNotMatch(normalized, /-dict/);
+
+  const bitstream = await service.bitstream(project.id, { frequency: 100 });
+  assert.equal(bitstream.success, true);
+  const binary = await fs.readFile(path.join(project.path, '.webvado/build/bitstream.bin'));
+  assert.ok(binary.length > 1_000_000, 'xc7a35t bitstream should be ~2.2 MB');
+  assert.ok(binary.includes(Buffer.from([0x00, 0x09, 0x0f, 0xf0])), 'missing xc7 synchronization word');
+  assert.equal(await service.requireFreshBitstream(project.id), path.join(project.path, '.webvado/build/bitstream.bin'));
+  console.log(JSON.stringify({ part: 'xc7a35t', bytes: binary.length }));
+
+  await fs.writeFile(path.join(project.path, 'srcs/rtl/broken.v'), 'module broken(; endmodule');
+  await assert.rejects(service.requireFreshBitstream(project.id), { code: 'PREREQUISITE_MISSING' });
+  await assert.rejects(service.implement(project.id, { frequency: 100 }), { code: 'PREREQUISITE_MISSING' });
+});
+
 test('real generic and ECP5 synthesis use explicit top and preserve nonempty statistics', { timeout: 120000 }, async () => {
   for (const part of ['generic', 'ecp5-25k']) {
     const project = await fixture(`synth_${part}`, part);

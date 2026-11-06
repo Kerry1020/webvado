@@ -44,3 +44,4 @@ test-results/
 # Temporary
 tmp/
 temp/
+tools/chipdb/

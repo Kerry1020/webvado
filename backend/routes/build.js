@@ -7,6 +7,8 @@ const router = express.Router();
 const STATUS = {
   PROJECT_NOT_FOUND: 404,
   TOOL_MISSING: 424,
+  CHIPDB_MISSING: 424,
+  NO_CONSTRAINTS: 400,
   NO_SOURCES: 400,
   NO_TESTBENCH: 400,
   NO_VCD: 422,

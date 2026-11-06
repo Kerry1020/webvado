@@ -114,6 +114,7 @@ export const en_US = {
         ice40hx8k: 'iCE40 HX8K',
         ice40up5k: 'iCE40 UP5K',
         ecp5_85k: 'ECP5 85K',
+        xc7a35t: 'Artix-7 XC7A35T (EGO1)',
         generic: 'Generic'
       }
     },
